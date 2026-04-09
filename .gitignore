@@ -1,3 +1,4 @@
 
 *.tar.gz
 data/raw/
+cesnet_points_clustered_4slices.csv
