@@ -1,4 +1,4 @@
-.PHONY: build-subnet-panel eda-subnet-panel eda-html preprocess-panel backtest-panel tune-lightgbm tune-lstm tune-prophet tune-patchtst benchmark-lstm benchmark-prophet benchmark-patchtst benchmark-deterministic benchmark-report model-comparison run-history-sensitivity history-sensitivity history-tables rank-metrics test
+.PHONY: build-subnet-panel eda-subnet-panel eda-html preprocess-panel backtest-panel tune-lightgbm tune-lstm tune-prophet tune-patchtst benchmark-lstm benchmark-prophet benchmark-patchtst benchmark-deterministic benchmark-report model-comparison run-history-sensitivity history-sensitivity history-tables probabilistic-selection rank-metrics test
 
 PYTHON ?= python3
 export PYTHONPATH := src:$(PYTHONPATH)
@@ -56,6 +56,9 @@ history-sensitivity:
 
 history-tables:
 	$(PYTHON) -m scripts.make_history_tables
+
+probabilistic-selection:
+	$(PYTHON) -m scripts.make_probabilistic_selection
 
 rank-metrics:
 	$(PYTHON) -m scripts.evaluate
