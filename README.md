@@ -11,7 +11,7 @@ Create a virtual environment and install the forecasting dependencies:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -r requirements-forecasting.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 Run commands from the repository root. The `Makefile` sets `PYTHONPATH=src` automatically.
@@ -92,4 +92,3 @@ The `models/` directory contains the small preprocessing artifacts used for 4-sl
 - `kmeans_4clusters.pkl`
 - `scaler_4clusters.pkl`
 - `cluster_to_slice.pkl`
-

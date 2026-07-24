@@ -1,0 +1,4 @@
+best_params:
+  changepoint_prior_scale: 0.01
+  seasonality_prior_scale: 10.0
+  seasonality_mode: additive
