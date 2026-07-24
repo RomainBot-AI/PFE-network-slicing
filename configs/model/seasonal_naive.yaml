@@ -1,0 +1,8 @@
+name: seasonal_naive_daily
+class: baseline
+seasonal_period: 144
+
+alternatives:
+  weekly:
+    name: seasonal_naive_weekly
+    seasonal_period: 1008

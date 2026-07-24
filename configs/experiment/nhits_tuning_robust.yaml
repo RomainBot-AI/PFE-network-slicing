@@ -1,0 +1,43 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 2016
+  horizon: 36
+  step_size: 144
+  n_folds: 5
+  fold_stride: 144
+
+tuning:
+  n_trials: 10
+  objective: MASE
+  internal_validation_folds: 3
+  internal_fold_stride: 144
+  max_steps_range: [120, 420]
+  learning_rate_range: [0.0001, 0.003]
+  batch_size_choices: [32, 64]
+  windows_batch_size_choices: [512, 1024, 2048]
+  step_size_choices: [144, 288]
+  mlp_width_choices: [64, 128, 256]
+  n_blocks_choices: [1]
+  max_dropout: 0.4
+
+base_model:
+  scaler_type: robust
+  stack_types: [identity, identity, identity]
+  n_pool_kernel_size: [2, 2, 1]
+  n_freq_downsample: [4, 2, 1]
+  val_check_steps: 50
+  early_stop_patience_steps: -1
+
+training:
+  device: auto
+  slices: []
+
+output:
+  output_dir: experiments/runs/nhits_tuning_robust

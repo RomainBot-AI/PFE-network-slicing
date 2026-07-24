@@ -1,0 +1,49 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 2016
+  horizon: 36
+  step_size: 144
+  n_folds: 5
+  fold_stride: 144
+
+model:
+  max_steps: 300
+  learning_rate: 0.0001
+  batch_size: 32
+  windows_batch_size: 1024
+  inference_windows_batch_size: 1024
+  step_size: 288
+  scaler_type: standard
+  encoder_layers: 3
+  n_heads: 8
+  hidden_size: 128
+  linear_hidden_size: 256
+  dropout: 0.2
+  fc_dropout: 0.2
+  head_dropout: 0.0
+  attn_dropout: 0.0
+  patch_len: 16
+  stride: 8
+  revin: true
+  revin_affine: false
+  revin_subtract_last: true
+  activation: gelu
+  res_attention: true
+  batch_normalization: false
+  learn_pos_embed: true
+  val_check_steps: 50
+  early_stop_patience_steps: -1
+
+training:
+  device: auto
+  slices: []
+
+output:
+  output_dir: experiments/runs/patchtst_benchmark

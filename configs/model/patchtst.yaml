@@ -1,0 +1,5 @@
+name: patchtst
+class: deep_transformer
+scope: global_panel
+status: planned
+note: "Keep optional until the deterministic baseline and N-HiTS panel protocol are stable."

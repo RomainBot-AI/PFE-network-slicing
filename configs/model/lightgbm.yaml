@@ -1,0 +1,5 @@
+name: lightgbm
+class: machine_learning
+scope: global_with_slice_id
+objective: regression
+note: "Planned model: lag/calendar feature baseline with strong performance-cost tradeoff."

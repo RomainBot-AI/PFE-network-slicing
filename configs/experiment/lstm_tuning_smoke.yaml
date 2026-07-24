@@ -1,0 +1,27 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 24
+  horizon: 3
+  step_size: 144
+  n_folds: 2
+  fold_stride: 144
+
+tuning:
+  n_trials: 1
+  objective: MASE
+  validation_fraction: 0.2
+  train_origin_stride: 24
+  max_windows_per_slice: 32
+  max_epochs: 2
+  patience: 1
+  device: cpu
+
+output:
+  output_dir: experiments/runs/lstm_tuning_smoke

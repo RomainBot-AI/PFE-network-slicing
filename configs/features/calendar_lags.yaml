@@ -1,0 +1,23 @@
+calendar:
+  hour_of_day: true
+  day_of_week: true
+  is_weekend: true
+
+seasonality:
+  daily_period_steps: 144
+  weekly_period_steps: 1008
+
+lags:
+  steps:
+    - 1
+    - 2
+    - 3
+    - 6
+    - 12
+    - 36
+    - 144
+    - 1008
+
+fourier:
+  daily_order: 4
+  weekly_order: 3

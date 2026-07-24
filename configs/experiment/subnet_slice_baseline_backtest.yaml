@@ -1,0 +1,29 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 2016
+  horizon: 36
+  step_size: 144
+  n_folds: 5
+  fold_stride: 144
+
+models:
+  - name: persistence
+  - name: seasonal_naive_daily
+    params:
+      seasonal_period: 144
+  - name: seasonal_naive_weekly
+    params:
+      seasonal_period: 1008
+  - name: moving_average
+    params:
+      window: 12
+
+output:
+  run_dir: experiments/runs/subnet_slice_baseline_backtest

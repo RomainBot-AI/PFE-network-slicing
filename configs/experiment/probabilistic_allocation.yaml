@@ -1,0 +1,14 @@
+name: probabilistic_allocation
+stage: probabilistic
+status: planned
+methods:
+  - quantile_regression
+  - conformal_prediction
+metrics:
+  - pinball_loss
+  - approximated_CRPS
+  - PICP
+  - MPIW
+allocation:
+  capacity_from_quantile: true
+  note: "Account for SLA violation, over-provisioning, and later smoothing/reallocation cost."

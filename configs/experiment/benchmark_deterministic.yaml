@@ -1,0 +1,15 @@
+name: benchmark_deterministic
+stage: deterministic
+metrics:
+  - MAE
+  - RMSE
+  - WAPE
+  - MASE
+  - bias
+  - under_prediction_error
+  - over_prediction_error
+report_by_horizon: true
+selection_notes:
+  - "Do not select only by average WAPE/RMSE."
+  - "Compare stability across folds, slices, horizons, and training cost."
+  - "Use Diebold-Mariano or Wilcoxon-style paired tests when enough folds are available."

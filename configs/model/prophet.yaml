@@ -1,0 +1,8 @@
+name: prophet
+class: statistical
+scope: local_per_slice
+train_tail: 0
+daily_seasonality: true
+weekly_seasonality: true
+yearly_seasonality: false
+seasonality_mode: additive
