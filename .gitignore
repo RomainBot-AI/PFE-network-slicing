@@ -1,9 +1,5 @@
 
 *.tar.gz
-<<<<<<< HEAD
-data/raw/
-cesnet_points_clustered_4slices.csv
-=======
 *:Zone.Identifier
 .venv/
 __pycache__/
@@ -18,4 +14,3 @@ traffic_forecasting/models/
 experiments/runs/
 data/interim/
 data/processed/
->>>>>>> Publish clean project code
