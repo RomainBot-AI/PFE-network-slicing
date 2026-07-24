@@ -14,7 +14,7 @@ backtest:
   fold_stride: 144
 
 features:
-  seasonal_scale_period: 144
+  seasonal_scale_period: 1
   train_origin_stride: 12
   lags:
     - 1
