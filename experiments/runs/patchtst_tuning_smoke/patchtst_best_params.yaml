@@ -1,0 +1,27 @@
+best_params:
+  max_steps: 1
+  learning_rate: 0.0005
+  batch_size: 8
+  windows_batch_size: 32
+  inference_windows_batch_size: 32
+  step_size: 288
+  scaler_type: standard
+  encoder_layers: 1
+  n_heads: 4
+  hidden_size: 32
+  linear_hidden_size: 64
+  dropout: 0.1
+  fc_dropout: 0.1
+  head_dropout: 0.0
+  attn_dropout: 0.0
+  patch_len: 24
+  stride: 12
+  revin: true
+  revin_affine: false
+  revin_subtract_last: true
+  activation: gelu
+  res_attention: true
+  batch_normalization: false
+  learn_pos_embed: true
+  val_check_steps: 1
+  early_stop_patience_steps: -1

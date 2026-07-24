@@ -1,0 +1,37 @@
+best_params_by_slice:
+  URLLC:
+    max_steps: 402
+    learning_rate: 0.0020978213384576817
+    batch_size: 64
+    windows_batch_size: 1024
+    step_size: 288
+    mlp_width: 128
+    n_blocks: 1
+    dropout_prob_theta: 0.11237380387495231
+  URLLC_eMBB_MIX:
+    max_steps: 393
+    learning_rate: 0.0002334720250903526
+    batch_size: 64
+    windows_batch_size: 2048
+    step_size: 288
+    mlp_width: 256
+    n_blocks: 1
+    dropout_prob_theta: 0.32146883075964583
+  eMBB:
+    max_steps: 180
+    learning_rate: 0.0005748924681991981
+    batch_size: 32
+    windows_batch_size: 512
+    step_size: 288
+    mlp_width: 64
+    n_blocks: 1
+    dropout_prob_theta: 0.2736932106048628
+  mMTC:
+    max_steps: 183
+    learning_rate: 0.00018559980846490597
+    batch_size: 64
+    windows_batch_size: 512
+    step_size: 144
+    mlp_width: 256
+    n_blocks: 1
+    dropout_prob_theta: 0.3140703845572055

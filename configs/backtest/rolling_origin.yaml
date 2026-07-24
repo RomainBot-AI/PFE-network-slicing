@@ -1,0 +1,17 @@
+strategy: rolling_origin
+frequency: 10min
+
+# Given the previous two weeks, predict the next six hours.
+input_size: 2016
+horizon: 36
+step_size: 144
+
+# Same temporal protocol for all slices/series.
+split_mode: rotating_blocks
+split_block_size: 0
+block_pattern: train,train,val,train,train,test
+rotate_by: id_institution_subnet
+
+val_fraction: 0.15
+test_fraction: 0.15
+expanding: false

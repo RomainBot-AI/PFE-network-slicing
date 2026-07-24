@@ -1,0 +1,4 @@
+name: dlinear
+class: deep_linear
+scope: global_or_per_slice
+status: planned

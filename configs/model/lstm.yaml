@@ -1,0 +1,8 @@
+name: lstm
+class: deep
+scope: local_per_slice
+window: 288
+hidden_size: 128
+epochs: 50
+batch_size: 64
+learning_rate: 0.001

@@ -1,0 +1,10 @@
+name: nhits_subnet_slice
+class: deep
+scope: per_slice_panel
+input_size: 2016
+horizon: 36
+step_size: 144
+max_steps: 500
+batch_size: 64
+windows_batch_size: 512
+training_scope: per-slice

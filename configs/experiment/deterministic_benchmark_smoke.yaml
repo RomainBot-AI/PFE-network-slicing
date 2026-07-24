@@ -1,0 +1,42 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 288
+  horizon: 3
+  step_size: 144
+  n_folds: 2
+  fold_stride: 144
+
+features:
+  seasonal_scale_period: 144
+  train_origin_stride: 12
+  lags:
+    - 1
+    - 2
+    - 3
+    - 6
+    - 12
+    - 36
+    - 144
+
+models:
+  - name: persistence
+  - name: seasonal_naive_daily
+    params:
+      seasonal_period: 144
+  - name: lightgbm
+    params:
+      training_scope: per_slice
+      n_estimators: 20
+      learning_rate: 0.1
+      num_leaves: 15
+      min_child_samples: 10
+
+output:
+  run_dir: experiments/runs/deterministic_benchmark_smoke

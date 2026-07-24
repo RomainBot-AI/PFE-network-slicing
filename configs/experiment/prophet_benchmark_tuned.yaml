@@ -1,0 +1,33 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 2016
+  horizon: 36
+  step_size: 144
+  n_folds: 5
+  fold_stride: 144
+
+model:
+  daily_seasonality: true
+  weekly_seasonality: true
+  yearly_seasonality: false
+  seasonality_mode: additive
+  changepoint_prior_scale: 0.05
+  seasonality_prior_scale: 10.0
+  interval_width: 0.8
+  log_transform: true
+
+training:
+  slices: []
+  max_series_per_slice:
+  train_tail:
+  params_path: experiments/runs/prophet_tuning/prophet_best_params.yaml
+
+output:
+  output_dir: experiments/runs/prophet_benchmark_tuned

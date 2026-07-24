@@ -1,0 +1,30 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 144
+  horizon: 3
+  step_size: 144
+  n_folds: 2
+  fold_stride: 144
+
+features:
+  calendar: true
+  log_target: true
+  scale_per_series: true
+  lags:
+    - 1
+    - 2
+    - 3
+    - 6
+    - 12
+    - 36
+    - 144
+
+output:
+  output_dir: data/processed/subnet_slice_preprocess_smoke

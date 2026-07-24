@@ -1,0 +1,15 @@
+# Root experiment configuration.
+#
+# This file is intentionally declarative. Current CLI wrappers use the files
+# below as documented defaults; deeper Hydra/OmegaConf composition can be added
+# later without changing model code.
+
+defaults:
+  data: data/traffic_10min.yaml
+  features: features/calendar_lags.yaml
+  backtest: backtest/rolling_origin.yaml
+  model: model/persistence.yaml
+  experiment: experiment/benchmark_deterministic.yaml
+
+seed: 42
+project: network-slice-forecasting

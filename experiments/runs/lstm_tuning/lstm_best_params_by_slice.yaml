@@ -1,0 +1,29 @@
+best_params_by_slice:
+  URLLC:
+    hidden_size: 128
+    num_layers: 1
+    dropout: 0.2606969239654834
+    learning_rate: 0.0005493487931243712
+    batch_size: 32
+    epochs: 19
+  URLLC_eMBB_MIX:
+    hidden_size: 128
+    num_layers: 1
+    dropout: 0.27628611039003176
+    learning_rate: 0.0005762834685393487
+    batch_size: 32
+    epochs: 12
+  eMBB:
+    hidden_size: 64
+    num_layers: 2
+    dropout: 0.26457571266728
+    learning_rate: 0.001559420736443579
+    batch_size: 32
+    epochs: 12
+  mMTC:
+    hidden_size: 32
+    num_layers: 2
+    dropout: 0.17936999364332554
+    learning_rate: 0.0036832964384234204
+    batch_size: 64
+    epochs: 13

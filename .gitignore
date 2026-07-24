@@ -1,4 +1,16 @@
 
 *.tar.gz
+*:Zone.Identifier
+.venv/
+__pycache__/
 data/raw/
 cesnet_points_clustered_4slices.csv
+simulation/mininet/cesnet_points_clustered_4slices.csv
+reports/
+traffic_forecasting/data/
+traffic_forecasting/outputs/
+traffic_forecasting/reports/
+traffic_forecasting/models/
+experiments/runs/
+data/interim/
+data/processed/

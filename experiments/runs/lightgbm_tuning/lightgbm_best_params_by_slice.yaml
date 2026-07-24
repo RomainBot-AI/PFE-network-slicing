@@ -1,0 +1,45 @@
+best_params_by_slice:
+  URLLC:
+    n_estimators: 100
+    learning_rate: 0.04935001286474261
+    num_leaves: 31
+    min_child_samples: 100
+    subsample: 0.7009735948305188
+    colsample_bytree: 0.9166276183929732
+    reg_alpha: 0.1
+    reg_lambda: 0.01
+    n_jobs: 1
+    verbosity: -1
+  URLLC_eMBB_MIX:
+    n_estimators: 200
+    learning_rate: 0.0782509566489794
+    num_leaves: 31
+    min_child_samples: 100
+    subsample: 0.7382336557846416
+    colsample_bytree: 0.79247750497904
+    reg_alpha: 0.0
+    reg_lambda: 0.1
+    n_jobs: 1
+    verbosity: -1
+  eMBB:
+    n_estimators: 100
+    learning_rate: 0.03084025472147111
+    num_leaves: 127
+    min_child_samples: 50
+    subsample: 0.9185635181958113
+    colsample_bytree: 0.7941031942584973
+    reg_alpha: 0.0
+    reg_lambda: 1.0
+    n_jobs: 1
+    verbosity: -1
+  mMTC:
+    n_estimators: 100
+    learning_rate: 0.06335234013258484
+    num_leaves: 63
+    min_child_samples: 100
+    subsample: 0.9121925931118231
+    colsample_bytree: 0.8306461435023031
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+    n_jobs: 1
+    verbosity: -1

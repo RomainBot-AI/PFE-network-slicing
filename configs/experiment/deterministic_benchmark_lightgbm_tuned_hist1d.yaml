@@ -1,0 +1,42 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 144
+  horizon: 36
+  step_size: 144
+  n_folds: 5
+  fold_stride: 144
+
+features:
+  seasonal_scale_period: 144
+  train_origin_stride: 12
+  lags:
+    - 1
+    - 2
+    - 3
+    - 6
+    - 12
+    - 36
+    - 72
+
+models:
+  - name: persistence
+  - name: seasonal_naive_daily
+    params:
+      seasonal_period: 144
+  - name: seasonal_naive_weekly
+    params:
+      seasonal_period: 1008
+  - name: lightgbm
+    params:
+      training_scope: per_slice
+      slice_params_path: experiments/runs/lightgbm_tuning/lightgbm_best_params_by_slice.yaml
+
+output:
+  run_dir: experiments/runs/deterministic_benchmark_lightgbm_tuned_hist1d
