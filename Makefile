@@ -1,4 +1,4 @@
-.PHONY: build-subnet-panel eda-subnet-panel eda-html preprocess-panel backtest-panel tune-lightgbm tune-lstm tune-prophet tune-patchtst benchmark-lstm benchmark-prophet benchmark-patchtst benchmark-deterministic benchmark-report model-comparison run-history-sensitivity history-sensitivity history-tables probabilistic-selection rank-metrics test
+.PHONY: build-subnet-panel eda-subnet-panel eda-html preprocess-panel backtest-panel tune-lightgbm tune-lstm tune-prophet tune-patchtst benchmark-lstm benchmark-prophet benchmark-patchtst benchmark-deterministic benchmark-probabilistic-lightgbm benchmark-report model-comparison run-history-sensitivity history-sensitivity history-tables probabilistic-selection rank-metrics test
 
 PYTHON ?= python3
 export PYTHONPATH := src:$(PYTHONPATH)
@@ -32,6 +32,9 @@ tune-patchtst:
 
 benchmark-deterministic:
 	$(PYTHON) -m scripts.run_deterministic_benchmark
+
+benchmark-probabilistic-lightgbm:
+	$(PYTHON) -m scripts.run_probabilistic_lightgbm
 
 benchmark-lstm:
 	$(PYTHON) -m scripts.run_lstm_benchmark

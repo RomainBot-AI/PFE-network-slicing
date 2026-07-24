@@ -1,0 +1,38 @@
+seed: 42
+
+data:
+  panel_csv: traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 144
+  horizon: 3
+  step_size: 144
+  n_folds: 1
+  fold_stride: 144
+
+features:
+  seasonal_scale_period: 144
+  train_origin_stride: 72
+  lags:
+    - 1
+    - 2
+    - 3
+    - 6
+    - 12
+    - 36
+    - 72
+
+model:
+  name: lightgbm_quantile
+  quantiles: [0.1, 0.5, 0.9]
+  params:
+    training_scope: per_slice
+    n_estimators: 20
+    learning_rate: 0.08
+    num_leaves: 15
+
+output:
+  run_dir: experiments/runs/probabilistic_lightgbm_smoke
