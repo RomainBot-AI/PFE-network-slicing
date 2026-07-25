@@ -8,6 +8,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 import logging
+import os
+import csv
 import requests
 import time
 from collections import deque
@@ -27,8 +29,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class NetworkConfig:
     """Configuration du réseau SDN"""
-    ryu_controller_ip: str = "172.18.0.10"
-    ryu_rest_port: int = 8080
+    ryu_controller_ip: str = field(default_factory=lambda: os.getenv("RYU_CONTROLLER_IP", "172.18.0.10"))
+    ryu_rest_port: int = field(default_factory=lambda: int(os.getenv("RYU_REST_PORT", "8080")))
     num_switches: int = 1
     num_ports_per_switch: int = 3
     # 4 slices: 0=URLLC, 1=URLLC_eMBB_MIX, 2=eMBB, 3=mMTC
@@ -50,6 +52,13 @@ class NetworkConfig:
 
     # tc class ids matching topology.py
     tc_classes: Tuple[str, ...] = ("1:10", "1:11", "1:12", "1:13")
+
+    # Optional proactive demand forecast. If forecast_csv is set, PPO can use
+    # q10/q50/q90 Mbps forecasts exported from the forecasting benchmark.
+    forecast_csv: str = field(default_factory=lambda: os.getenv("FORECAST_CSV", ""))
+    forecast_quantile: str = field(default_factory=lambda: os.getenv("FORECAST_QUANTILE", "q90"))
+    forecast_mode: str = field(default_factory=lambda: os.getenv("FORECAST_MODE", "max"))
+    forecast_loop: bool = field(default_factory=lambda: os.getenv("FORECAST_LOOP", "1") not in {"0", "false", "False"})
 
 
 @dataclass
@@ -81,6 +90,73 @@ class TrafficRedirectResult:
     load_eco2: float              = 0.0
 
 
+class ForecastDemandProvider:
+    """Sequential slice-level demand forecasts loaded from a CSV file."""
+
+    def __init__(
+        self,
+        csv_path: str,
+        slice_names: Tuple[str, ...],
+        quantile: str = "q90",
+        loop: bool = True,
+    ):
+        self.csv_path = csv_path
+        self.slice_names = slice_names
+        self.quantile = quantile
+        self.loop = loop
+        self.column = f"{quantile}_mbps"
+        self.cursor = 0
+        self.timestamps: List[str] = []
+        self.loads: List[np.ndarray] = []
+        self.current_timestamp: Optional[str] = None
+        self._load_csv()
+
+    def _load_csv(self) -> None:
+        by_timestamp: Dict[str, np.ndarray] = {}
+        with open(self.csv_path, newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if self.column not in (reader.fieldnames or []):
+                raise ValueError(
+                    f"Forecast CSV {self.csv_path} is missing column {self.column}. "
+                    "Expected columns such as q10_mbps, q50_mbps, q90_mbps."
+                )
+            for row in reader:
+                timestamp = row["timestamp"]
+                slice_name = row["slice"]
+                if slice_name not in self.slice_names:
+                    continue
+                if timestamp not in by_timestamp:
+                    by_timestamp[timestamp] = np.zeros(len(self.slice_names), dtype=np.float32)
+                idx = self.slice_names.index(slice_name)
+                by_timestamp[timestamp][idx] = max(0.0, float(row[self.column]))
+
+        self.timestamps = sorted(by_timestamp)
+        self.loads = [by_timestamp[timestamp] for timestamp in self.timestamps]
+        if not self.loads:
+            raise ValueError(f"No usable forecast rows found in {self.csv_path}")
+
+    def next_loads(self) -> np.ndarray:
+        if self.cursor >= len(self.loads):
+            if not self.loop:
+                self.cursor = len(self.loads) - 1
+            else:
+                self.cursor = 0
+        self.current_timestamp = self.timestamps[self.cursor]
+        loads = self.loads[self.cursor].copy()
+        self.cursor += 1
+        return loads
+
+    def combine(self, observed_loads: np.ndarray, mode: str) -> Tuple[np.ndarray, np.ndarray]:
+        forecast_loads = self.next_loads()
+        if mode == "forecast":
+            return forecast_loads, forecast_loads
+        if mode == "add":
+            return observed_loads + forecast_loads, forecast_loads
+        if mode == "max":
+            return np.maximum(observed_loads, forecast_loads), forecast_loads
+        raise ValueError("FORECAST_MODE must be one of: max, forecast, add")
+
+
 # ---------------------------------------------------------------------------
 # Environnement SDN
 # ---------------------------------------------------------------------------
@@ -98,8 +174,8 @@ class SDNEnvironment:
         }
 
         self.base_url = f"http://{config.ryu_controller_ip}:{config.ryu_rest_port}"
-        self.ports = self.get_all_ports()[0]
-        self.numports = len(self.ports[0])
+        self.ports = self.wait_for_ports()
+        self.numports = len(self.ports)
 
         # Historique des pics de trafic par slice (pour le seuil αseuil·Maxi)
         self.traffic_peak: Dict[int, float] = {i: 1.0 for i in range(config.num_slices)}
@@ -113,15 +189,33 @@ class SDNEnvironment:
     # Appels REST
     # ------------------------------------------------------------------
 
-    def get_all_ports(self) -> List[Tuple]:
+    def get_all_ports(self) -> List[List[str]]:
         url = f"{self.base_url}/getports"
         try:
             response = requests.get(url, timeout=5)
             response.raise_for_status()
-            return response.json()['ports']
+            return response.json().get('ports', [])
         except requests.exceptions.RequestException as e:
             logger.error(f"Erreur requête REST {url}: {e}")
-            return [[]]
+            return []
+
+    def wait_for_ports(self, retries: int = 60, delay: float = 2.0) -> List[str]:
+        """Wait until Mininet has registered switch interfaces in Ryu."""
+        for attempt in range(1, retries + 1):
+            ports_payload = self.get_all_ports()
+            if ports_payload and ports_payload[0]:
+                ports = ports_payload[0]
+                self.logger.info(f"Ports détectés depuis Ryu: {ports}")
+                return ports
+            self.logger.info(
+                f"Ports Ryu indisponibles, attente Mininet "
+                f"({attempt}/{retries})..."
+            )
+            time.sleep(delay)
+        raise RuntimeError(
+            "Aucun port reçu depuis /getports. Lance d'abord topology.py dans "
+            "le conteneur Mininet et vérifie que Ryu est joignable."
+        )
 
     def _make_rest_request(self, endpoint: str, method: str = "GET", data: dict = None) -> Optional[dict]:
         url = f"{self.base_url}{endpoint}"
@@ -491,6 +585,21 @@ class CentralPPOAgent:
         self.ctrl1      = SDNController1(config)
         self.ctrl2      = SDNController2(config)
         self.safety     = SafetyReallocator(config)
+        self.forecast_provider: Optional[ForecastDemandProvider] = None
+        if config.forecast_csv:
+            self.forecast_provider = ForecastDemandProvider(
+                csv_path=config.forecast_csv,
+                slice_names=config.slice_names,
+                quantile=config.forecast_quantile,
+                loop=config.forecast_loop,
+            )
+            logger.info(
+                "Prévisions chargées depuis %s | quantile=%s | mode=%s | points=%d",
+                config.forecast_csv,
+                config.forecast_quantile,
+                config.forecast_mode,
+                len(self.forecast_provider.loads),
+            )
 
     # ------------------------------------------------------------------
     # Algorithme 1 : Décision d'activation brute (Agent PPO)
@@ -730,7 +839,16 @@ class CentralPPOAgent:
                 val = self.critic(torch.tensor(state, dtype=torch.float32)).item()
 
                 # ------ Algos 2→3→4 : RéacheminementTraffic ------
-                traffic_loads = self.env.get_traffic_loads()
+                observed_loads = self.env.get_traffic_loads()
+                traffic_loads = observed_loads
+                forecast_loads = None
+                forecast_timestamp = None
+                if self.forecast_provider is not None:
+                    traffic_loads, forecast_loads = self.forecast_provider.combine(
+                        observed_loads,
+                        self.config.forecast_mode,
+                    )
+                    forecast_timestamp = self.forecast_provider.current_timestamp
                 result = self.redirect_traffic(c_init, traffic_loads)
 
                 # ------ Application SDN ------
@@ -752,11 +870,18 @@ class CentralPPOAgent:
                 state = next_state
                 ep_reward += reward
 
+                forecast_msg = ""
+                if forecast_loads is not None:
+                    forecast_msg = (
+                        f" | forecast_ts={forecast_timestamp}"
+                        f" | observed={np.round(observed_loads, 3)}"
+                        f" | forecast={np.round(forecast_loads, 3)}"
+                    )
                 logger.info(
                     f"Ep {ep} | Step {t} | c_final={result.c_final} "
                     f"| rho={np.round(result.rho, 3)} | ΔE={result.delta_E:.3f} "
                     f"| L={result.L:.4f} | η={result.eta_b:.3f} "
-                    f"| surcharge={result.surcharge} | reward={reward:.4f}"
+                    f"| surcharge={result.surcharge}{forecast_msg} | reward={reward:.4f}"
                 )
 
             # Calcul des retours
