@@ -1,0 +1,9 @@
+__pycache__/
+.venv/
+*.html
+ancienne_version
+data/plots*
+srcv2ancienne_version/
+test/
+test.ipynb
+*.csv
