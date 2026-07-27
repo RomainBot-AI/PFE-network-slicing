@@ -7,6 +7,12 @@ Objectif : transformer les agrégats CESNET par IP en un CSV annoté avec 4 slic
 - `eMBB`
 - `mMTC`
 
+## Source de vérité
+
+Les notebooks historiques ne font plus partie du pipeline final. Ils ont servi a
+l'exploration initiale, mais les résultats reproductibles du rapport doivent
+être générés depuis les scripts versionnés de ce dossier.
+
 ## Exploration rapide
 
 Sans dépendance externe :

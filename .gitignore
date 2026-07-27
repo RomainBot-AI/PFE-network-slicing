@@ -1,6 +1,8 @@
 
 *.tar.gz
 *:Zone.Identifier
+*.ipynb
+*.pdf
 .venv/
 __pycache__/
 data/raw/
@@ -14,3 +16,7 @@ traffic_forecasting/models/
 experiments/runs/
 data/interim/
 data/processed/
+rapport_overleaf/
+ForecastingDoc/*.txt
+ForecastingDoc/*.md
+!ForecastingDoc/README.md
