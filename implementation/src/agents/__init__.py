@@ -1,5 +1,5 @@
-"""
-Package de l'agent PPO Acteur-Critique.
-"""
+"""Actor-Critic PPO agent."""
 
 from src.agents.ppo_agent import ActorCritic, PPOAgent
+
+__all__ = ["ActorCritic", "PPOAgent"]

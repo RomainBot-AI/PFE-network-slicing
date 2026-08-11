@@ -1,94 +1,118 @@
-# PFE Network Slicing Forecasting
+# Offline network-slicing PPO simulation
 
-Code for deterministic and probabilistic traffic forecasting experiments on network slicing time series.
+A self-contained simulation that closes the full network-slicing loop offline:
+**forecast per-slice demand → SDN slice on/off control → PPO reinforcement
+learning → energy and QoS evaluation**. Unlike `../simulation/` (live Ryu +
+Mininet in Docker), this project replays the real CESNET subnet/slice dataset in
+a pure-Python Gym-style environment, so it runs end-to-end from one command with
+no network emulation.
 
-The repository contains the reproducible pipeline code, experiment configurations, and the small preprocessing models used for slice construction. Large datasets and generated experiment runs are intentionally kept outside Git.
+The physical/energy and QoS model and the four SDN control algorithms follow the
+5G RAN power model of Phyu et al. (2023). It is an installable project of its own
+(`pyproject.toml`, `uv.lock`), separate from the root forecasting package.
+
+## Layout
+
+```text
+main.py                        CLI entry point (builds a RunConfig)
+src/simulator/ran_simulator.py 5G/6G RAN physics and energy model (power in W, per-slice latency/QoS)
+src/environment/sdn_controller_env.py  Gym-style SDN double-controller env (Algorithms 1–4)
+src/agents/ppo_agent.py        PyTorch Actor-Critic PPO, multi-Bernoulli policy, GAE, clipped loss
+src/models/                    traffic predictors behind one interface (see below)
+src/pipeline/config.py         RunConfig dataclass and default paths
+src/pipeline/trainer_evaluator.py  loads data, 80/20 split, trains predictor + PPO, evaluates, plots
+src/pipeline/macro_ran.py      groups subnets into K macro-RANs (K-means/quantiles) for speed
+src/visualization/             figure generators (per-model plots, benchmark, Pareto)
+tests/                         predictor and pipeline smoke tests
+data/experiments/              saved PNG results from earlier beta/lambda sweeps
+```
+
+The predictors share their windowing logic through two small bases:
+`StationWindowPredictor` (per-station train/predict loop) with
+`TabularLagPredictor` (ridge, lightgbm) and `SequencePredictor` (lstm, nhits) on
+top; `passthrough` (oracle) and `prophet` are standalone. Model backends are
+imported lazily, so a passthrough/ridge run does not require torch/lightgbm/prophet.
 
 ## Setup
 
-Create a virtual environment and install the forecasting dependencies:
+This project ships a `uv.lock`; `uv` is the recommended installer.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -r requirements.txt
+uv venv .venv
+uv pip install --python .venv -e '.[dev]'          # core + pytest (torch, lightgbm included)
+uv pip install --python .venv -e '.[dev,forecasting]'  # + prophet (needed only for --model prophet)
 ```
 
-Run commands from the repository root. The `Makefile` sets `PYTHONPATH=src` automatically.
+Plain `pip` works too: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`.
+Core dependencies (numpy, pandas, scikit-learn, matplotlib, torch, lightgbm)
+cover every model except prophet, which is the sole optional extra.
+
+## Usage
+
+Run from the `implementation/` directory:
+
+```bash
+.venv/bin/python main.py --model lightgbm --num_rans 4 --episodes 10
+.venv/bin/python main.py --model all --num_rans 4        # benchmark every predictor
+```
+
+A missing optional backend (e.g. prophet) is skipped in `--model all` rather
+than aborting the whole benchmark.
+
+Key arguments:
+
+```text
+--model        passthrough | ridge | lightgbm | lstm | nhits | prophet | all
+--subnet       all | topN | <id>            (ignored when --num_rans > 0)
+--num_rans     group the 69 subnets into K macro-RANs (0 = per-subnet)
+--steps        max steps per episode (0 = full dataset)
+--episodes     PPO training episodes
+--beta         weight of QoS satisfaction in the reward
+--lambda_loss  penalty for QoS violation / overload
+--dataset      dataset CSV path (defaults to the repo dataset, see below)
+--output_dir   figure output directory (defaults to implementation/data/plots)
+```
 
 ## Data
 
-Large traffic datasets are not versioned in Git. See `DATA.md` for the expected local files and paths.
-
-The main benchmark configs expect:
+Defaults resolve automatically to the repository dataset:
 
 ```text
-traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+../traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
 ```
 
-## Deterministic Benchmarks
+Columns: `ds`, `id_institution_subnet`, `slice`, `y`. Override with `--dataset`.
 
-Run the main deterministic benchmark:
+## Method
 
-```bash
-make benchmark-deterministic PYTHON=.venv/bin/python
-```
-
-Run model-specific benchmarks:
-
-```bash
-make benchmark-lstm PYTHON=.venv/bin/python
-make benchmark-prophet PYTHON=.venv/bin/python
-make benchmark-patchtst PYTHON=.venv/bin/python
-```
-
-The deterministic benchmark compares baselines, statistical models, machine learning, and deep learning models using the same temporal folds, horizons, and metrics.
-
-## Probabilistic Benchmarks
-
-Run LightGBM quantile forecasting:
-
-```bash
-make benchmark-probabilistic-lightgbm PYTHON=.venv/bin/python
-```
-
-Run DeepAR distributional forecasting:
-
-```bash
-make benchmark-probabilistic-deepar PYTHON=.venv/bin/python
-```
-
-The default probabilistic configs use a 14-day history and a 6-hour horizon. One-day history configs are also available:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m scripts.run_probabilistic_lightgbm --config configs/experiment/probabilistic_lightgbm_1d.yaml
-PYTHONPATH=src .venv/bin/python -m scripts.run_probabilistic_deepar --config configs/experiment/probabilistic_deepar_1d.yaml
-```
-
-Smoke tests for quick validation:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m scripts.run_probabilistic_lightgbm --config configs/experiment/probabilistic_lightgbm_smoke.yaml
-PYTHONPATH=src .venv/bin/python -m scripts.run_probabilistic_deepar --config configs/experiment/probabilistic_deepar_smoke.yaml
-```
+- **Reward**: `r_t = 1/f_b + beta * eta - lambda_loss * L`, trading off energy
+  efficiency (`1/f_b`, power in Watts), QoS satisfaction (`eta`), and traffic
+  loss (`L`).
+- **Control (Algorithms 1–4)**: PPO decides on/off per specialised slice
+  (EcoSlice 1 always on) → threshold filter turns off slices below
+  `alpha * Max_i` (causal rolling 95th percentile, no future leakage) → priority
+  routing (URLLC > URLLC_eMBB_MIX > mMTC > eMBB) into EcoSlice 1, spilling to
+  EcoSlice 2 above 75% → safety fallback re-activates the heaviest slice on
+  overload.
+- **Predictors** share the `BaseTrafficPredictor` interface and are scored by
+  MAE / RMSE / NMAE; `passthrough` is a perfect-foresight oracle baseline.
+- **Split**: chronological 80/20 train/test, no shuffling.
 
 ## Outputs
 
-Experiment runs are written under `experiments/runs/` and are ignored by Git. Typical outputs include:
+Figures are written under `--output_dir` (default `data/plots/`), with a flat
+copy under `data/plots/_artifacts/`. Per-run figures include traffic prediction,
+active-slice timeline, bandwidth allocation, QoS/SLA analysis, energy
+consumption, PPO train-vs-test, and an all-models benchmark chart.
+`data/experiments/` holds saved results from earlier `beta`/`lambda_loss` sweeps.
 
-- `predictions_probabilistic.csv`
-- `benchmark_summary.csv`
-- `benchmark_summary_by_slice.csv`
-- `benchmark_probabilistic_summary.csv`
-- `benchmark_probabilistic_summary_by_slice.csv`
-- `timing.csv`
-- `model_metadata.csv`
-- `leakage_audit.csv`
+Console logs and figure labels are in French; code and documentation are in English.
 
-## Models Included
+## Tests
 
-The `models/` directory contains the small preprocessing artifacts used for 4-slice construction:
+```bash
+.venv/bin/python -m pytest
+```
 
-- `kmeans_4clusters.pkl`
-- `scaler_4clusters.pkl`
-- `cluster_to_slice.pkl`
+The suite generates a small synthetic panel and checks each predictor plus a
+full pipeline run, so it needs no external dataset.

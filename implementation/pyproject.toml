@@ -5,18 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "network-slicing-pfe"
 version = "0.1.0"
-description = "Network slicing PFE with traffic forecasting experiments."
+description = "Offline network-slicing PPO simulation with traffic forecasting."
 requires-python = ">=3.10"
 dependencies = [
   "numpy",
   "pandas",
   "scikit-learn",
   "matplotlib",
+  "torch",
+  "lightgbm",
 ]
 
 [project.optional-dependencies]
+# Prophet is heavy (pystan/cmdstan); only the `prophet` predictor needs it.
 forecasting = [
-  "neuralforecast",
   "prophet",
 ]
 dev = [

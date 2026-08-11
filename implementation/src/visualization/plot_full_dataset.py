@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-====================================================================================================
- MODULE : src/visualization/plot_full_dataset.py
- OBJET  : Visualisation Autonome des Activations de Slices sur l'Intégralité du Dataset (10 Mois)
-====================================================================================================
+"""Standalone visualization of slice activations over the full dataset.
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Permet de visualiser l'activation des slices sur l'ensemble des 40 308 pas de temps (10 mois réels)
-de la station Subnet 0.
-
-====================================================================================================
+Runs the environment across every time step of subnet 0 and plots the resulting
+slice on/off timeline. Console and figure text are kept in French.
 """
 
 import os
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from src.environment.sdn_controller_env import SDN_DoubleController_Env
 
+_IMPL_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 def plot_full_dataset_activations():
-    dataset_path = "/home/cytech/Ing3/PFE/dataset_creation/subnet_slice_traffic_min2016_dense.csv"
-    output_dir = "/home/cytech/Ing3/PFE/dataset_creation/data/plots"
-    artifacts_dir = "/home/cytech/.gemini/antigravity-ide/brain/1226dc74-d762-40ab-8e24-6bb17ec42424"
+    dataset_path = str(_REPO_ROOT / "traffic_forecasting" / "data" / "subnet_slice_traffic_min2016_dense.csv")
+    output_dir = str(_IMPL_ROOT / "data" / "plots")
+    artifacts_dir = os.path.join(output_dir, "_artifacts")
 
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(artifacts_dir, exist_ok=True)

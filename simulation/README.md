@@ -6,6 +6,18 @@ This simulation uses:
 - Mininet to emulate the topology and generate traffic.
 - PPO to update the per-slice bandwidth allocation.
 
+## Components
+
+```text
+controller.py   Ryu OpenFlow controller and REST API (ports, stats, energy)
+mininet/topology.py   Mininet topology and tc slice classes (1:10..1:13)
+ppo.py          centralised PPO agent that allocates per-slice bandwidth,
+                enforces SLAs and slice priority, and optionally consumes a
+                proactive demand forecast
+forecast_inputs/   exported slice demand forecast consumed by ppo.py
+docker-compose.yml, Dockerfile.mininet   Ryu + Mininet container
+```
+
 ## Prerequisites
 
 - Docker Engine.
