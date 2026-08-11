@@ -1,0 +1,69 @@
+seed: 42
+
+data:
+  panel_csv: forecasting/data/subnet_slice_traffic_min2016_dense.csv
+  frequency: 10min
+
+backtest:
+  mode: rolling_origin
+  expanding: false
+  input_size: 2016
+  horizon: 36
+  step_size: 144
+  n_folds: 1
+  fold_stride: 144
+
+base_model:
+  max_steps: 1
+  learning_rate: 0.0005
+  batch_size: 8
+  windows_batch_size: 32
+  inference_windows_batch_size: 32
+  step_size: 288
+  scaler_type: standard
+  encoder_layers: 1
+  n_heads: 4
+  hidden_size: 32
+  linear_hidden_size: 64
+  dropout: 0.1
+  fc_dropout: 0.1
+  head_dropout: 0.0
+  attn_dropout: 0.0
+  patch_len: 32
+  stride: 16
+  revin: true
+  revin_affine: false
+  revin_subtract_last: true
+  activation: gelu
+  res_attention: true
+  batch_normalization: false
+  learn_pos_embed: true
+  val_check_steps: 1
+  early_stop_patience_steps: -1
+
+training:
+  device: auto
+  slices: [mMTC]
+
+tuning:
+  objective: MASE
+  candidates:
+    - name: smoke_a
+      max_steps: 1
+      hidden_size: 32
+      linear_hidden_size: 64
+      encoder_layers: 1
+      patch_len: 32
+      stride: 16
+      val_check_steps: 1
+    - name: smoke_b
+      max_steps: 1
+      hidden_size: 32
+      linear_hidden_size: 64
+      encoder_layers: 1
+      patch_len: 24
+      stride: 12
+      val_check_steps: 1
+
+output:
+  output_dir: forecasting/experiments/runs/patchtst_tuning_smoke

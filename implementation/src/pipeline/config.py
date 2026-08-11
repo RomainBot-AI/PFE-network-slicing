@@ -14,7 +14,7 @@ from typing import Optional
 _IMPL_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-DEFAULT_DATASET_PATH = str(_REPO_ROOT / "traffic_forecasting" / "data" / "subnet_slice_traffic_min2016_dense.csv")
+DEFAULT_DATASET_PATH = str(_REPO_ROOT / "forecasting" / "data" / "subnet_slice_traffic_min2016_dense.csv")
 DEFAULT_OUTPUT_DIR = str(_IMPL_ROOT / "data" / "plots")
 
 
