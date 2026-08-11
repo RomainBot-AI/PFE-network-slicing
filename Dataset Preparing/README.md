@@ -15,7 +15,7 @@ labelling traffic as `URLLC`, `URLLC_eMBB_MIX`, `eMBB`, or `mMTC`.
 ## Usage
 
 ```bash
-python3 -m pip install -r requirements-data.txt
+python3 -m pip install -r "Dataset Preparing/requirements.txt"
 python3 "Dataset Preparing/explore_dataset.py"
 python3 "Dataset Preparing/cluster_4_slices.py"
 ```

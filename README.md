@@ -37,10 +37,10 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-`requirements.txt` covers the forecasting pipeline. Additional requirement sets:
-`requirements-data.txt` (slice clustering), `simulation/requirements-ppo.txt`
-(PPO agent). Run all commands from the repository root; the `Makefile` exports
-`PYTHONPATH=src` automatically.
+`requirements.txt` covers the forecasting pipeline. Component-specific deps live
+with their code: `Dataset Preparing/requirements.txt` (slice clustering) and
+`simulation/requirements-ppo.txt` (PPO agent). Run all commands from the
+repository root; the `Makefile` exports `PYTHONPATH=src` automatically.
 
 ## Data
 
