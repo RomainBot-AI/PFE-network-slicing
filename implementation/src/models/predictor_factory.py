@@ -1,54 +1,44 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-====================================================================================================
- MODULE : src/models/predictor_factory.py
- OBJET  : Usine à Modèles (Factory Pattern) pour l'Instanciation des Prédicteurs
-====================================================================================================
+"""Factory for traffic predictors.
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Permet d'instancier facilement n'importe quel prédicteur de trafic à l'aide d'une clé de texte :
-  - 'passthrough' : Réallocation dynamique pure vs Baseline All-Active
-  - 'lightgbm'    : LightGBM Gradient Boosting (features multi-échelles & calendaires)
-  - 'lstm'        : Réseau PyTorch LSTM
-  - 'nhits'       : Réseau PyTorch N-HiTS
-  - 'prophet'     : Modèle Temporel Meta Prophet (tendance & saisonnalité)
-  - 'ridge'       : Régression Ridge supervisée
-  - 'all'         : Exécute la comparaison de TOUS les modèles !
-
-====================================================================================================
+Imports are deferred to ``get_traffic_predictor`` so that selecting a light model
+(passthrough, ridge) does not require the heavy optional backends
+(torch, lightgbm, prophet) to be installed.
 """
+
+from __future__ import annotations
 
 from src.models.base_predictor import BaseTrafficPredictor
-from src.models.passthrough_predictor import PassthroughTrafficPredictor
-from src.models.ridge_predictor import MLTrafficPredictor
-from src.models.lightgbm_predictor import LightGBMTrafficPredictor
-from src.models.lstm_predictor import LSTMTrafficPredictor
-from src.models.nhits_predictor import NHiTSTrafficPredictor
-from src.models.prophet_predictor import ProphetTrafficPredictor
 
-AVAILABLE_MODELS = ['passthrough', 'lightgbm', 'lstm', 'nhits', 'prophet']
+AVAILABLE_MODELS = ["passthrough", "lightgbm", "lstm", "nhits", "prophet"]
 
 
 def get_traffic_predictor(model_name: str = "passthrough", **kwargs) -> BaseTrafficPredictor:
-    """
-    Instancie le prédicteur de trafic correspondant.
-    """
+    """Instantiate the predictor matching ``model_name``."""
     key = model_name.lower()
+
     if key == "passthrough":
-        return PassthroughTrafficPredictor()
-    elif key in ["lightgbm", "lgbm", "gbm"]:
+        from src.models.passthrough_predictor import PassthroughTrafficPredictor
+
+        return PassthroughTrafficPredictor(**kwargs)
+    if key in {"ridge", "ml"}:
+        from src.models.ridge_predictor import RidgeTrafficPredictor
+
+        return RidgeTrafficPredictor(**kwargs)
+    if key in {"lightgbm", "lgbm", "gbm"}:
+        from src.models.lightgbm_predictor import LightGBMTrafficPredictor
+
         return LightGBMTrafficPredictor(**kwargs)
-    elif key == "lstm":
+    if key == "lstm":
+        from src.models.lstm_predictor import LSTMTrafficPredictor
+
         return LSTMTrafficPredictor(**kwargs)
-    elif key in ["nhits", "nhitm"]:
+    if key in {"nhits", "nhitm"}:
+        from src.models.nhits_predictor import NHiTSTrafficPredictor
+
         return NHiTSTrafficPredictor(**kwargs)
-    elif key in ["prophet", "fbprophet"]:
+    if key in {"prophet", "fbprophet"}:
+        from src.models.prophet_predictor import ProphetTrafficPredictor
+
         return ProphetTrafficPredictor(**kwargs)
-    elif key in ["ridge", "ml"]:
-        return MLTrafficPredictor(**kwargs)
-    else:
-        raise ValueError(
-            f"Modèle inconnu: '{model_name}'. Modèles disponibles: {AVAILABLE_MODELS} ou 'all'."
-        )
+
+    raise ValueError(f"Unknown model: '{model_name}'. Available: {AVAILABLE_MODELS} or 'all'.")

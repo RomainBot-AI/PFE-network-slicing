@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Générateur de la Frontière de Pareto Énergie vs QoS pour les 4 Régimes d'Expérimentation
+"""Energy-vs-QoS Pareto frontier chart for the four experiment regimes.
+
+Figure labels are kept in French to match the report/defense.
 """
 
 import os
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Données synthétiques consolidées issues des 4 expériences du PFE
+_IMPL_ROOT = Path(__file__).resolve().parents[2]
+
+# Consolidated results from the four PFE experiments.
 experiments = {
     'Exp 2 : Sobriété Extrême\n(β=2, λ=10)': {
         'Gain Énergie (%)': 29.49,
@@ -45,7 +49,7 @@ labels = list(experiments.keys())
 colors = [v['Color'] for v in experiments.values()]
 markers = [v['Marker'] for v in experiments.values()]
 
-# Tracer la courbe de compromis / Frontière de Pareto
+# Plot the trade-off curve / Pareto frontier.
 sorted_indices = np.argsort(gains)
 gains_sorted = np.array(gains)[sorted_indices]
 qos_sorted = np.array(qos_scores)[sorted_indices]
@@ -72,8 +76,8 @@ ax.set_ylabel('Satisfaction QoS Moyenne (%) sur Test Set', fontsize=11, fontweig
 ax.set_xlim(5, 35)
 ax.set_ylim(75, 100)
 
-target_dir = "/home/cytech/Ing3/PFE/dataset_creation/data/plots"
-artifact_dir = "/home/cytech/.gemini/antigravity-ide/brain/1226dc74-d762-40ab-8e24-6bb17ec42424"
+target_dir = str(_IMPL_ROOT / "data" / "plots")
+artifact_dir = os.path.join(target_dir, "_artifacts")
 
 os.makedirs(target_dir, exist_ok=True)
 os.makedirs(artifact_dir, exist_ok=True)

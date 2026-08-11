@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-====================================================================================================
- MODULE : src/visualization/plot_generator.py
- OBJET  : Générateur de Graphiques Explicatifs et Comparatifs Ultra-Lisibles (Publication Quality)
-====================================================================================================
+"""Figure generator for the simulation (saved under ``<output_dir>/<model>/``).
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Génère et sauvegarde les 6 figures explicatives de la simulation sous `./data/plots/<model_name>/` :
-  1. 1_traffic_prediction_train_test.png : Trafic Réel Total vs Prédit.
-  2. 2_active_slices_timeline.png         : Timeline d'activation des slices (c_final).
-  3. 3_slice_bandwidth_allocation.png    : Allocation de bande passante (\rho) lissée par tranche.
-  4. 4_qos_violations_analysis.png        : Satisfaction QoS eta_b et suivi des violations.
-  5. 5_energy_consumption_train_test.png  : Économies d'énergie en Watts (Baseline All-Active vs PPO+SDN).
-  6. 6_ppo_train_vs_test_performance.png  : Courbe de convergence de la récompense PPO.
-  7. 7_benchmark_all_models.png           : Graphique comparatif récapitulatif.
-
-====================================================================================================
+Produces seven figures. Figure text (titles, labels, legends) is kept in French
+to match the report/defense:
+  1. traffic prediction (real vs predicted)   2. active-slice timeline (c_final)
+  3. per-slice bandwidth allocation (rho)      4. QoS satisfaction and violations
+  5. energy consumption (all-active vs PPO+SDN) 6. PPO reward convergence
+  7. all-models benchmark comparison.
 """
 
 import os
@@ -29,11 +19,11 @@ from typing import Dict, List, Any
 
 
 def aggregate_by_timestamp(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Agrège les métriques Multi-RAN par timestamp unique :
-      - SOMME pour le Trafic (total_real_traffic, total_pred_traffic) et la Puissance (f_b_t, f_b_base)
-      - MOYENNE pour la QoS (eta_b_t, qos_*), Ratios (\rho_*), Récompense (reward)
-      - MAX pour les activations (c_final_*), violations (qos_violation) et surcharge.
+    """Aggregate multi-RAN metrics per unique timestamp.
+
+    Sum traffic and power (total_*_traffic, f_b_t, f_b_base); max the activation
+    and violation flags (c_final_*, qos_violation, surcharge, c_eco2); mean every
+    other numeric column (QoS, rho, reward).
     """
     if 'timestamp' not in df.columns or len(df) == 0:
         return df.copy()
@@ -63,9 +53,7 @@ def add_metadata_badge(
     num_rans: int = 4,
     num_subnets: int = 69
 ):
-    """
-    Ajoute un bandeau discret de métadonnées d'expérimentation en bas du graphique.
-    """
+    """Add a small experiment-metadata banner at the bottom of the figure."""
     param_str = f"Paramètres Simulation :  β={beta:.1f} (Poids QoS)  |  λ_loss={lambda_loss:.1f} (Pénalité Loss)  |  Macro-RANs={num_rans}  |  Subnets Bruts={num_subnets}"
     fig.text(
         0.01, 0.005, param_str,
@@ -86,16 +74,14 @@ def generate_all_plots(
     num_rans: int = 4,
     num_subnets: int = 69
 ):
-    """
-    Génère et sauvegarde les 6 figures explicatives avec des lignes simples, nettes et épurées.
-    """
+    """Generate and save the per-model explanatory figures."""
     model_dir = os.path.join(data_plots_dir, model_name.lower())
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(artifacts_dir, exist_ok=True)
 
     plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
 
-    # Agrégation globale par timestamp (Somme Trafic/Énergie, Moyenne QoS/Ratios)
+    # Aggregate globally per timestamp (sum traffic/energy, mean QoS/ratios).
     df_train_plt = aggregate_by_timestamp(df_train)
     df_test_plt = aggregate_by_timestamp(df_test)
 
@@ -103,12 +89,12 @@ def generate_all_plots(
     time_test = pd.to_datetime(df_test_plt['timestamp'])
     date_format_year = mdates.DateFormatter('%d/%m/%Y')
 
-    # Fenêtre de lissage dynamique (Moyenne Glissante)
+    # Dynamic smoothing window (rolling mean).
     win_smooth = max(5, min(50, len(df_train_plt) // 100))
     colors_slice = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#1abc9c', '#e74c3c']
 
     # -------------------------------------------------------------------------
-    # Graphique 1 : Trafic Réel Total vs Prédit (Nette & Sans Bruit)
+    # Figure 1: total real vs predicted traffic.
     # -------------------------------------------------------------------------
     fig1, (ax1_train, ax1_test) = plt.subplots(1, 2, figsize=(16, 5.2))
     
@@ -147,7 +133,7 @@ def generate_all_plots(
     save_fig(fig1, '1_traffic_prediction_train_test.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
-    # Graphique 2 : Timeline de Réallocation Dynamique des Slices (Test Set - Heatmap Matrix)
+    # Figure 2: dynamic slice reallocation timeline (test set, heatmap).
     # -------------------------------------------------------------------------
     fig2, ax2 = plt.subplots(figsize=(16, 4.8))
     
@@ -185,7 +171,7 @@ def generate_all_plots(
     save_fig(fig2, '2_active_slices_timeline.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
-    # Graphique 3 : Allocation de Bande Passante (rho_i) Lissée par Slice (Proportionnel DYNAMIQUE)
+    # Figure 3: smoothed per-slice bandwidth allocation (rho_i).
     # -------------------------------------------------------------------------
     fig3, axes3 = plt.subplots(len(slice_names), 1, figsize=(16, 2.5 * len(slice_names)), sharex=True)
     if len(slice_names) == 1:
@@ -201,7 +187,7 @@ def generate_all_plots(
             ax.plot(time_test, rho_smooth, color=colors_slice[idx % len(colors_slice)], linewidth=2.0, label=f'Ratio Bande Passante $\\rho_{{{s}}}$')
             ax.fill_between(time_test, 0, rho_smooth, color=colors_slice[idx % len(colors_slice)], alpha=0.15)
             
-            # Échelle Y Proportionnelle et Dynamique selon les vraies données de la slice !
+            # Dynamic proportional Y scale based on the slice's own data.
             max_rho_val = float(rho_smooth.max()) if len(rho_smooth) > 0 else 0.1
             ax.set_ylim(0, max(0.02, max_rho_val * 1.20))
         
@@ -218,7 +204,7 @@ def generate_all_plots(
     save_fig(fig3, '3_slice_bandwidth_allocation.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
-    # Graphique 4 : Satisfaction QoS Global & Barres QoS Moyenne par Slice (Dynamique Proportionnel)
+    # Figure 4: global QoS satisfaction and mean per-slice QoS bars.
     # -------------------------------------------------------------------------
     fig4, (ax4_top, ax4_bot) = plt.subplots(2, 1, figsize=(16, 7), gridspec_kw={'height_ratios': [1.3, 1]})
 
@@ -240,7 +226,7 @@ def generate_all_plots(
     ax4_top.set_title(f'Analyse de la QoS et Violations sous Réallocation Dynamique ({model_name.upper()})', fontsize=12, fontweight='bold')
     ax4_top.set_ylabel('Satisfaction QoS (0.0 - 1.0)', fontsize=10)
     
-    # Adaptation dynamique de la limite inférieure Y pour zoomer proprement sur les variations
+    # Dynamically adapt the lower Y bound to zoom on the variations.
     ax4_top.set_ylim(max(0.0, qos_min_val - 0.08), 1.05)
     ax4_top.xaxis.set_major_formatter(date_format_year)
     ax4_top.tick_params(axis='x', rotation=25)
@@ -253,7 +239,7 @@ def generate_all_plots(
     ax4_bot.set_title('Taux de Satisfaction QoS Moyenne par Slice (%)', fontsize=11, fontweight='bold')
     ax4_bot.set_ylabel('QoS Moyenne par Slice', fontsize=10)
     
-    # Adaptation proportionnelle dynamique de l'axe Y des barres QoS
+    # Dynamic proportional Y axis for the QoS bars.
     max_q_val = max(qos_means) if len(qos_means) > 0 else 100.0
     ax4_bot.set_ylim(0, min(118.0, max(20.0, max_q_val * 1.18)))
 
@@ -265,7 +251,7 @@ def generate_all_plots(
     save_fig(fig4, '4_qos_violations_analysis.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
-    # Graphique 4b : Ratios de Latence Normalisée par Slice (SLA Limit = 1.0)
+    # Figure 4b: normalized per-slice latency ratios (SLA limit = 1.0).
     # -------------------------------------------------------------------------
     fig4b, ax4b = plt.subplots(figsize=(16, 5))
     sla_map = {'URLLC': 1.0, 'URLLC_eMBB_MIX': 5.0, 'eMBB': 10.0, 'mMTC': 20.0}
@@ -287,7 +273,7 @@ def generate_all_plots(
     ax4b.xaxis.set_major_formatter(date_format_year)
     ax4b.tick_params(axis='x', rotation=25)
     
-    # Échelle dynamique adaptée aux ratios
+    # Dynamic scale adapted to the ratios.
     ax4b.set_ylim(0, 2.5)
     ax4b.legend(loc='upper right', frameon=True)
 
@@ -296,7 +282,7 @@ def generate_all_plots(
     save_fig(fig4b, '4b_slice_latencies_sla.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
-    # Graphique 5 : Consommation Énergétique Total Cumulée (Watts)
+    # Figure 5: total cumulative energy consumption (Watts).
     # -------------------------------------------------------------------------
     fig5, (ax5_train, ax5_test) = plt.subplots(1, 2, figsize=(16, 5.2))
 
@@ -333,7 +319,7 @@ def generate_all_plots(
     save_fig(fig5, '5_energy_consumption_train_test.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
-    # Graphique 6 : Convergence de la Récompense Agent PPO
+    # Figure 6: PPO reward convergence.
     # -------------------------------------------------------------------------
     fig6, ax6 = plt.subplots(figsize=(16, 4.8))
     
@@ -375,7 +361,7 @@ def generate_comparison_plot(
     fig, (ax_energy, ax_qos, ax_nmae) = plt.subplots(1, 3, figsize=(18, 5.5))
     colors = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#e74c3c', '#1abc9c']
 
-    # 1. Gain Énergétique (%) - Échelle Proportionnelle Dynamique
+    # 1. Energy gain (%) - dynamic proportional scale.
     ax_energy.bar([m.upper() for m in models], energy_gains, color=colors[:len(models)])
     ax_energy.set_title('Gain Énergétique Moyen (%) sur Test Set', fontsize=12, fontweight='bold')
     ax_energy.set_ylabel('Gain Delta E (%)', fontsize=11)
@@ -385,7 +371,7 @@ def generate_comparison_plot(
     for i, v in enumerate(energy_gains):
         ax_energy.text(i, v + (max_e * 0.02), f"{v:.1f}%", ha='center', fontweight='bold')
 
-    # 2. Satisfaction QoS (%) - Échelle Proportionnelle Dynamique
+    # 2. QoS satisfaction (%) - dynamic proportional scale.
     ax_qos.bar([m.upper() for m in models], qos_scores, color=colors[:len(models)])
     ax_qos.set_title('Satisfaction QoS Moyenne (%) sur Test Set', fontsize=12, fontweight='bold')
     ax_qos.set_ylabel('Satisfaction QoS (%)', fontsize=11)
@@ -395,12 +381,12 @@ def generate_comparison_plot(
     for i, v in enumerate(qos_scores):
         ax_qos.text(i, v + (max_q * 0.02), f"{v:.1f}%", ha='center', fontweight='bold')
 
-    # 3. Erreur NMAE Normalisée (%) - Échelle Dynamique Adaptée aux Faibles Erreurs !
+    # 3. NMAE error (%) - dynamic scale adapted to small errors.
     ax_nmae.bar([m.upper() for m in models], nmae_errors, color=colors[:len(models)])
     ax_nmae.set_title('Erreur NMAE Normalisée (%) du Trafic', fontsize=12, fontweight='bold')
     ax_nmae.set_ylabel('NMAE (%)', fontsize=11)
     
-    # Fix crucial : Adaptation dynamique au max réel au lieu de bloquer à 100% !
+    # Adapt dynamically to the real max instead of capping at 100%.
     max_n = max(nmae_errors) if len(nmae_errors) > 0 and max(nmae_errors) > 0 else 1.0
     ax_nmae.set_ylim(0, max(1.0, max_n * 1.25))
 

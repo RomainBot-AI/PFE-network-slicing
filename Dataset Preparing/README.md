@@ -1,53 +1,26 @@
 # Dataset preparation
 
-Objectif : transformer les agrégats CESNET par IP en un CSV annoté avec 4 slices :
+Builds the reproducible 4-slice dataset from CESNET per-IP aggregates,
+labelling traffic as `URLLC`, `URLLC_eMBB_MIX`, `eMBB`, or `mMTC`.
 
-- `URLLC`
-- `URLLC_eMBB_MIX`
-- `eMBB`
-- `mMTC`
+## Scripts
 
-## Source de vérité
+- `explore_dataset.py` — dependency-free inspection of the available CSV files,
+  schemas, row counts, and basic statistics.
+- `cluster_4_slices.py` — the pipeline: reads per-IP aggregates, engineers
+  interpretable traffic features, fits a MiniBatchKMeans on a balanced sample
+  with a RobustScaler, predicts a cluster per row, and maps clusters to the four
+  slice labels.
 
-Les notebooks historiques ne font plus partie du pipeline final. Ils ont servi a
-l'exploration initiale, mais les résultats reproductibles du rapport doivent
-être générés depuis les scripts versionnés de ce dossier.
-
-## Exploration rapide
-
-Sans dépendance externe :
-
-```bash
-python3 "Dataset Preparing/explore_dataset.py"
-```
-
-Ce script vérifie les fichiers disponibles, les schémas CSV, les volumes de lignes
-et quelques statistiques simples.
-
-## Clustering 4 slices
-
-Installer les dépendances :
+## Usage
 
 ```bash
 python3 -m pip install -r requirements-data.txt
-```
-
-Lancer le pipeline complet :
-
-```bash
+python3 "Dataset Preparing/explore_dataset.py"
 python3 "Dataset Preparing/cluster_4_slices.py"
 ```
 
-Sorties principales :
-
-- `simulation/mininet/cesnet_points_clustered_4slices.csv`
-- `models/scaler_4clusters.pkl`
-- `models/kmeans_4clusters.pkl`
-- `models/cluster_to_slice.pkl`
-- `reports/cluster_4_slices_profile.csv`
-- `reports/cluster_4_slices_report.json`
-
-Pour tester rapidement sur quelques fichiers :
+Quick run on a few files:
 
 ```bash
 python3 "Dataset Preparing/cluster_4_slices.py" \
@@ -55,4 +28,19 @@ python3 "Dataset Preparing/cluster_4_slices.py" \
   --output-csv /tmp/cesnet_points_clustered_4slices.csv \
   --models-dir /tmp/pfe-models \
   --reports-dir /tmp/pfe-reports
+```
+
+## Inputs and outputs
+
+Input: `data/raw/ip_sample/ip_addresses_sample/agg_10_minutes/` (one CSV per IP).
+
+Outputs:
+
+```text
+simulation/mininet/cesnet_points_clustered_4slices.csv
+models/scaler_4clusters.pkl
+models/kmeans_4clusters.pkl
+models/cluster_to_slice.pkl
+reports/cluster_4_slices_profile.csv
+reports/cluster_4_slices_report.json
 ```

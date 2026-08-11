@@ -1,5 +1,5 @@
-"""
-Package d'entraînement et d'évaluation du pipeline 5G/6G.
-"""
+"""Training, evaluation, and benchmark pipeline."""
 
-from src.pipeline.trainer_evaluator import run_single_model_pipeline, run_all_models_pipeline
+from src.pipeline.trainer_evaluator import run_all_models_pipeline, run_single_model_pipeline
+
+__all__ = ["run_single_model_pipeline", "run_all_models_pipeline"]

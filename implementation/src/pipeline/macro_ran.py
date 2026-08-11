@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-====================================================================================================
- MODULE : src/pipeline/macro_ran.py
- OBJET  : Clustering et Agrégation Spatial en K "Macro-RAN" (Option --num_rans)
-====================================================================================================
+"""Spatial clustering and aggregation of subnets into K macro-RANs.
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Regroupe les 69 subnets du dataset en K "Macro-RAN" clusters par K-means (log1p + quantiles)
-selon leur profil de trafic (volume par slice), puis agrège la demande (somme exacte du trafic)
-de tous les subnets d'un même groupe pour chaque (timestamp, slice).
-
-AVANTAGES DU MODE MACRO-RAN :
-----------------------------
-  1. Accélération Massive (17x plus rapide) : Réduit le nombre de pas de temps de 2,7M à ~160k steps.
-  2. Conservation Totale de l'Information (0% de perte) : 100% de la charge du réseau est conservée.
-  3. Signal Réseau Physique Réaliste : Représente K grands gNodeB/Macro-Cellules régionales.
-
-====================================================================================================
+Groups the subnets into K clusters with K-means on their per-slice traffic
+profile (log1p scale, with a quantile fallback when clusters are too imbalanced),
+then sums the demand of every subnet in a group for each (timestamp, slice). This
+keeps 100% of the network load while cutting the number of time steps, so it
+represents K regional gNodeBs / macro-cells and trains much faster.
 """
 
 import logging
@@ -40,9 +28,10 @@ def build_subnet_to_macro_map(
     seed: int = 42,
     max_imbalance_ratio: float = 4.0
 ) -> Dict[int, int]:
-    """
-    Construit le mapping {subnet_id -> macro_ran_id (0..K-1)}.
-    Utilise K-means sur l'échelle log1p avec garde-fou par quantiles.
+    """Build the mapping ``{subnet_id -> macro_ran_id}`` (0..K-1).
+
+    Uses K-means on the log1p scale with a quantile-based fallback when the
+    resulting clusters are too imbalanced.
     """
     profile = raw.pivot_table(index=col_ran, columns=col_slice, values=col_value, aggfunc="sum", fill_value=0.0)
     profile["__total__"] = profile.sum(axis=1)
@@ -84,10 +73,7 @@ def aggregate_to_macro_rans(
     col_slice: str = "slice",
     col_value: str = "y"
 ) -> pd.DataFrame:
-    """
-    Agrège le dataset brut en remplaçant id_institution_subnet par le macro_ran_id,
-    puis somme les charges de trafic pour chaque (timestamp, macro_ran, slice).
-    """
+    """Aggregate the raw panel by macro-RAN, summing traffic per (timestamp, macro_ran, slice)."""
     df = raw[[col_time, col_ran, col_slice, col_value]].copy()
     df["macro_ran"] = df[col_ran].map(subnet_to_macro)
     if df["macro_ran"].isna().any():
@@ -95,6 +81,6 @@ def aggregate_to_macro_rans(
     df["macro_ran"] = df["macro_ran"].astype(int)
 
     agg = df.groupby([col_time, "macro_ran", col_slice], as_index=False)[col_value].sum()
-    # Renommer macro_ran -> id_institution_subnet pour compatibilité avec l'environnement
+    # Rename macro_ran -> id_institution_subnet for compatibility with the environment.
     agg = agg.rename(columns={"macro_ran": col_ran})
     return agg

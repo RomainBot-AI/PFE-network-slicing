@@ -3,12 +3,16 @@
 *:Zone.Identifier
 *.ipynb
 *.pdf
+.vscode
 .venv/
 __pycache__/
+*.egg-info/
 data/raw/
 cesnet_points_clustered_4slices.csv
 simulation/mininet/cesnet_points_clustered_4slices.csv
 reports/
+docs/
+implementation/data/plots/
 traffic_forecasting/data/
 traffic_forecasting/outputs/
 traffic_forecasting/reports/
@@ -17,6 +21,4 @@ experiments/runs/
 data/interim/
 data/processed/
 rapport_overleaf/
-ForecastingDoc/*.txt
-ForecastingDoc/*.md
-!ForecastingDoc/README.md
+ForecastingDoc/

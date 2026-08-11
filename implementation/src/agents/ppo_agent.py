@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-====================================================================================================
- MODULE : src/agents/ppo_agent.py
- OBJET  : Agent d Apprentissage par Renforcement PPO Multi-Binaire PyTorch
-====================================================================================================
+"""Multi-binary PPO agent (PyTorch, Actor-Critic).
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Implémente l'agent PPO (Proximal Policy Optimization) avec architecture Acteur-Critique en PyTorch.
-  - Acteur Multi-Binaire : Produit une distribution de Bernoulli pour chaque tranche spécialisée (p_i in [0, 1]).
-  - Critique : Estime la fonction de valeur V(s) pour le calcul de l'avantage (GAE - Generalized Advantage Estimation).
-  - PPO Loss : Clipped Surrogate Objective (epsilon = 0.2) + MSE Loss pour le Critique.
-
-====================================================================================================
+- Actor: a Bernoulli distribution per specialised slice (p_i in [0, 1]).
+- Critic: estimates the value function V(s) for advantage computation (GAE).
+- Loss: clipped surrogate objective (epsilon = 0.2) plus MSE on the critic.
 """
 
 import torch
@@ -25,22 +16,21 @@ from typing import Tuple, List, Dict, Any
 
 
 class ActorCritic(nn.Module):
-    """
-    Réseau Neuronal Acteur-Critique PyTorch pour Actions Multi-Binaires.
-    """
+    """Actor-Critic network for multi-binary actions."""
+
     def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 64):
         super().__init__()
-        # Tête Acteur (Politique pi_theta)
+        # Actor head (policy pi_theta): one Bernoulli probability per slice.
         self.actor = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
-            nn.Sigmoid()  # Sortie p_i in [0, 1] pour chaque tranche
+            nn.Sigmoid()
         )
 
-        # Tête Critique (Fonction de valeur V_phi)
+        # Critic head (value function V_phi).
         self.critic = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
@@ -56,9 +46,7 @@ class ActorCritic(nn.Module):
 
 
 class PPOAgent:
-    """
-    Agent PPO pour l'optimisation dynamique des tranches réseau 5G/6G.
-    """
+    """PPO agent for dynamic 5G/6G network-slice activation."""
 
     def __init__(
         self,
@@ -83,9 +71,7 @@ class PPOAgent:
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
 
     def select_action(self, state: np.ndarray) -> Tuple[np.ndarray, float, float]:
-        """
-        Échantillonne un vecteur d'actions binaires c_init in {0, 1}^K selon la distribution de Bernoulli.
-        """
+        """Sample a binary action vector c_init in {0, 1}^K from the Bernoulli policy."""
         state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             probs, value = self.policy(state_t)
@@ -105,9 +91,7 @@ class PPOAgent:
         values: List[float],
         dones: List[bool]
     ):
-        """
-        Mise à jour des poids PPO via Clipped Loss et GAE.
-        """
+        """Update the policy with the PPO clipped loss and GAE advantages."""
         if len(states) == 0:
             return
 
@@ -118,7 +102,7 @@ class PPOAgent:
         values_t = torch.tensor(np.array(values), dtype=torch.float32)
         dones_t = torch.tensor(np.array(dones), dtype=torch.float32)
 
-        # Calcul des avantages GAE (Generalized Advantage Estimation)
+        # Generalized Advantage Estimation (GAE).
         advantages = torch.zeros_like(rewards_t)
         last_gae = 0.0
 
@@ -131,7 +115,7 @@ class PPOAgent:
         returns_t = advantages + values_t
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        # Optimisation PPO
+        # PPO optimization.
         for _ in range(self.ppo_epochs):
             probs, state_values = self.policy(states_t)
             dist = Bernoulli(probs)
