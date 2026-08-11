@@ -4,7 +4,7 @@ PYTHON ?= python3
 export PYTHONPATH := src:$(PYTHONPATH)
 
 build-subnet-panel:
-	$(PYTHON) traffic_forecasting/build_subnet_slice_series.py
+	$(PYTHON) -m scripts.build_subnet_panel --dense --output-csv traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
 
 eda-subnet-panel:
 	$(PYTHON) -m scripts.make_eda_report
