@@ -78,7 +78,7 @@ Key arguments:
 Defaults resolve automatically to the repository dataset:
 
 ```text
-../traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+../forecasting/data/subnet_slice_traffic_min2016_dense.csv
 ```
 
 Columns: `ds`, `id_institution_subnet`, `slice`, `y`. Override with `--dataset`.

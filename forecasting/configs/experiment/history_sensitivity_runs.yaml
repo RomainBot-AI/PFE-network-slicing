@@ -1,0 +1,45 @@
+skip_existing: true
+make_reports: true
+comparison_output_dir: reports
+
+runs:
+  - id: prophet_hist1d
+    kind: prophet
+    config: forecasting/configs/experiment/prophet_benchmark_tuned_hist1d.yaml
+    output_dir: forecasting/experiments/runs/prophet_benchmark_tuned_hist1d
+  - id: prophet_hist1w
+    kind: prophet
+    config: forecasting/configs/experiment/prophet_benchmark_tuned_hist1w.yaml
+    output_dir: forecasting/experiments/runs/prophet_benchmark_tuned_hist1w
+  - id: lightgbm_hist1d
+    kind: deterministic
+    config: forecasting/configs/experiment/deterministic_benchmark_lightgbm_tuned_hist1d.yaml
+    output_dir: forecasting/experiments/runs/deterministic_benchmark_lightgbm_tuned_hist1d
+  - id: lightgbm_hist1w
+    kind: deterministic
+    config: forecasting/configs/experiment/deterministic_benchmark_lightgbm_tuned_hist1w.yaml
+    output_dir: forecasting/experiments/runs/deterministic_benchmark_lightgbm_tuned_hist1w
+  - id: lstm_hist1d
+    kind: lstm
+    config: forecasting/configs/experiment/lstm_benchmark_5000w_hist1d.yaml
+    output_dir: forecasting/experiments/runs/lstm_benchmark_5000w_hist1d
+  - id: lstm_hist1w
+    kind: lstm
+    config: forecasting/configs/experiment/lstm_benchmark_5000w_hist1w.yaml
+    output_dir: forecasting/experiments/runs/lstm_benchmark_5000w_hist1w
+  - id: nhits_hist1d
+    kind: nhits
+    config: forecasting/configs/experiment/nhits_benchmark_tuned_hist1d.yaml
+    output_dir: forecasting/experiments/runs/nhits_benchmark_tuned_hist1d
+  - id: nhits_hist1w
+    kind: nhits
+    config: forecasting/configs/experiment/nhits_benchmark_tuned_hist1w.yaml
+    output_dir: forecasting/experiments/runs/nhits_benchmark_tuned_hist1w
+  - id: patchtst_hist1d
+    kind: patchtst
+    config: forecasting/configs/experiment/patchtst_benchmark_tuned_hist1d.yaml
+    output_dir: forecasting/experiments/runs/patchtst_benchmark_tuned_hist1d
+  - id: patchtst_hist1w
+    kind: patchtst
+    config: forecasting/configs/experiment/patchtst_benchmark_tuned_hist1w.yaml
+    output_dir: forecasting/experiments/runs/patchtst_benchmark_tuned_hist1w

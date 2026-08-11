@@ -19,7 +19,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def plot_full_dataset_activations():
-    dataset_path = str(_REPO_ROOT / "traffic_forecasting" / "data" / "subnet_slice_traffic_min2016_dense.csv")
+    dataset_path = str(_REPO_ROOT / "forecasting" / "data" / "subnet_slice_traffic_min2016_dense.csv")
     output_dir = str(_IMPL_ROOT / "data" / "plots")
     artifacts_dir = os.path.join(output_dir, "_artifacts")
 

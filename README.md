@@ -14,11 +14,11 @@ demand of the next hour and reserve capacity before the spike arrives.
   raw CESNET traffic
          │
    ┌─────▼───────────────┐
-   │ 1. Prepare datasets  │  Dataset Preparing/  →  clustered slice dataset
+   │ 1. Prepare datasets  │  dataset-prep/       →  clustered slice dataset
    └─────┬───────────────┘                         + benchmark panel
          │
    ┌─────▼───────────────┐
-   │ 2. Forecast demand   │  src/nsf + scripts/  →  LightGBM q90 demand signal
+   │ 2. Forecast demand   │  forecasting/        →  LightGBM q90 demand signal
    └─────┬───────────────┘                         (CSV for the simulation)
          │
    ┌─────▼───────────────┐        ┌──────────────────────────────┐
@@ -40,9 +40,9 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Run commands from the repository root; the `Makefile` exports `PYTHONPATH=src`
+Run commands from the repository root; the `Makefile` sets `PYTHONPATH`
 automatically. Component-specific dependencies live with their code
-(`Dataset Preparing/requirements.txt`, `simulation/requirements-ppo.txt`).
+(`dataset-prep/requirements.txt`, `simulation/requirements-ppo.txt`).
 
 Large datasets are not versioned in Git — see [Data](#data) for where each file
 goes.
@@ -58,12 +58,13 @@ Two datasets drive the project, both built from raw CESNET aggregates in
 slices:
 
 ```bash
-python3 -m pip install -r "Dataset Preparing/requirements.txt"
-python3 "Dataset Preparing/cluster_4_slices.py"
+python3 -m pip install -r dataset-prep/requirements.txt
+python3 dataset-prep/cluster_4_slices.py
 ```
 
 This writes `simulation/mininet/cesnet_points_clustered_4slices.csv` and the
-clustering artifacts under `models/`. Details in `Dataset Preparing/README.md`.
+clustering artifacts under `dataset-prep/models/`. Details in
+`dataset-prep/README.md`.
 
 **Forecasting panel** — build the dense subnet/slice panel from the clustered
 dataset and the `id → subnet` mapping (`data/reference/ids_relationship.csv`):
@@ -72,7 +73,7 @@ dataset and the `id → subnet` mapping (`data/reference/ids_relationship.csv`):
 make build-subnet-panel PYTHON=.venv/bin/python
 ```
 
-This writes `traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv`
+This writes `forecasting/data/subnet_slice_traffic_min2016_dense.csv`
 (columns `unique_id`, `ds`, `y`, `slice`) — the panel the benchmarks read. See
 [Data](#data).
 
@@ -87,7 +88,7 @@ make benchmark-deterministic PYTHON=.venv/bin/python
 make benchmark-probabilistic-lightgbm PYTHON=.venv/bin/python
 
 # Export the retained LightGBM q90 forecast as a slice-level demand signal
-PYTHONPATH=src .venv/bin/python -m scripts.export_probabilistic_forecast_for_simulation
+PYTHONPATH=forecasting/src:forecasting .venv/bin/python -m scripts.export_probabilistic_forecast_for_simulation
 ```
 
 The export writes
@@ -161,19 +162,24 @@ It also benchmarks every predictor at once (`--model all`). See
 
 ## Repository layout
 
+Five component folders, each self-contained:
+
 ```text
-Dataset Preparing/   builds the 4-slice clustered dataset from raw CESNET aggregates
-src/nsf/             forecasting package (data, backtest, models, evaluation, export)
-scripts/             command-line entry points (thin wrappers over src/nsf)
-configs/             declarative experiment configuration
-simulation/          Ryu SDN controller, Mininet topology, and PPO allocation agent
-implementation/      self-contained offline forecast-in-the-loop PPO simulation
-models/              slice-construction artifacts (kmeans, scaler, cluster→slice map)
-tests/               unit tests, including anti-leakage tests
-data/                raw / interim / processed data (contents ignored by Git)
-data/reference/      ids_relationship.csv: CESNET id → institution/subnet mapping
-experiments/runs/    generated benchmark outputs (ignored by Git)
+data/            inputs: raw CESNET aggregates + reference/ (id → subnet mapping)
+dataset-prep/    clusters raw traffic into 4 slices; holds its models/ artifacts
+forecasting/     the forecasting package and everything it needs:
+                   src/nsf/     package (data, backtest, models, evaluation, export)
+                   scripts/     command-line entry points (thin wrappers over src/nsf)
+                   configs/     declarative experiment configuration
+                   tests/       unit tests, including anti-leakage tests
+                   data/        the benchmark panel (generated, ignored by Git)
+                   experiments/ benchmark run outputs (ignored by Git)
+simulation/      Ryu SDN controller, Mininet topology, and PPO allocation agent
+implementation/  self-contained offline forecast-in-the-loop PPO simulation
 ```
+
+Everything runs from the repository root; the `Makefile` puts `forecasting/src`
+on `PYTHONPATH`.
 
 ## Data
 
@@ -182,7 +188,7 @@ Large datasets are not versioned in Git:
 ```text
 data/raw/                                                    raw CESNET per-IP aggregates (input)
 simulation/mininet/cesnet_points_clustered_4slices.csv       stage-1 slice dataset (generated)
-traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv   forecasting panel (generated by `make build-subnet-panel`)
+forecasting/data/subnet_slice_traffic_min2016_dense.csv      forecasting panel (generated by `make build-subnet-panel`)
 ```
 
 ## Forecasting reference
@@ -199,7 +205,8 @@ folds:       5 rolling-origin folds, stride 144 steps (1 day)
 ```
 
 Scaling and features are fit on train only; metrics are reported per horizon and
-per slice with a leakage audit per run. Outputs land under `experiments/runs/`.
+per slice with a leakage audit per run. Outputs land under
+`forecasting/experiments/runs/`.
 
 Models: baselines (persistence, seasonal naive, moving average), Prophet,
 LightGBM (point and quantile), LSTM, N-HiTS, PatchTST, DeepAR.

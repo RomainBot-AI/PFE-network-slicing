@@ -1,10 +1,10 @@
 .PHONY: build-subnet-panel eda-subnet-panel eda-html preprocess-panel backtest-panel tune-lightgbm tune-lstm tune-prophet tune-patchtst benchmark-lstm benchmark-prophet benchmark-patchtst benchmark-deterministic benchmark-probabilistic-lightgbm benchmark-probabilistic-deepar benchmark-report model-comparison run-history-sensitivity history-sensitivity history-tables probabilistic-selection test
 
 PYTHON ?= python3
-export PYTHONPATH := src:$(PYTHONPATH)
+export PYTHONPATH := forecasting/src:forecasting:$(PYTHONPATH)
 
 build-subnet-panel:
-	$(PYTHON) -m scripts.build_subnet_panel --dense --output-csv traffic_forecasting/data/subnet_slice_traffic_min2016_dense.csv
+	$(PYTHON) -m scripts.build_subnet_panel --dense --output-csv forecasting/data/subnet_slice_traffic_min2016_dense.csv
 
 eda-subnet-panel:
 	$(PYTHON) -m scripts.make_eda_report

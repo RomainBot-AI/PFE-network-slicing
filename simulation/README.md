@@ -37,7 +37,7 @@ simulation/mininet/cesnet_points_clustered_4slices.csv
 Generate it with:
 
 ```bash
-python3 "Dataset Preparing/cluster_4_slices.py"
+python3 dataset-prep/cluster_4_slices.py
 ```
 
 ## Start Ryu and Mininet container
@@ -81,7 +81,7 @@ Export the retained LightGBM quantile forecast to a slice-level simulation
 input:
 
 ```bash
-PYTHONPATH=src python3 scripts/export_probabilistic_forecast_for_simulation.py
+PYTHONPATH=forecasting/src:forecasting python3 -m scripts.export_probabilistic_forecast_for_simulation
 ```
 
 This creates:

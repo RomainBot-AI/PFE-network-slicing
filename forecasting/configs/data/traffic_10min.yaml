@@ -1,0 +1,16 @@
+raw_sliced_csv: simulation/mininet/cesnet_points_clustered_4slices.csv
+subnet_panel_csv: forecasting/data/subnet_slice_traffic_min2016_dense.csv
+subnet_slice_series_csv: forecasting/data/slice_traffic_from_subnet_min2016.csv
+relationship_csv: data/reference/ids_relationship.csv
+
+frequency: 10min
+target_column: n_bytes
+time_column: timestamp
+slice_column: slice
+panel_id_column: unique_id
+target_granularity: subnet_slice
+slices:
+  - URLLC
+  - URLLC_eMBB_MIX
+  - eMBB
+  - mMTC
