@@ -1,44 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ====================================================================================================
  MODULE : src/simulator/ran_simulator.py
  OBJET  : Moteur Physique & Énergétique du Réseau d'Accès Radio (RAN) 5G/6G
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
 Ce module simule la couche physique et énergétique d'une station de base (gNodeB) 5G/6G
-supportant le découpage en tranches réseau (Network Slicing). Il calcule à chaque pas de temps 
-tau = 10 minutes (SADI : Slice Activation/Deactivation Interval) :
-  1. La répartition dynamique du trafic et de la bande passante (ratio rho_{i,b}).
-  2. La consommation électrique globale en Watts (f_b) selon le modèle de puissance 5G RAN (Phyu et al., 2023).
-  3. La latence atteinte (delta_i) par tranche et le taux de satisfaction QoS moyen (eta_b)
-     calculé par moyenne arithmétique non pondérée selon l'Étape 4 (Ligne 17 du PDF des Algorithmes) :
-       eta_b^t = (1 / |I_b|) * sum_{i in I_b} eta_{i,b}^t
+supportant le découpage en tranches réseau (Network Slicing).
+Il est instancié au sein de l'environnement Gymnasium (`src/environment/sdn_controller_env.py`)
+et calcule à chaque pas de temps $\tau = 10$ minutes :
+  1. La répartition dynamique du trafic et la charge relative ($\rho_{i,b}$).
+  2. La consommation électrique globale en Watts ($f_b$) basée sur le modèle 5G (Phyu et al., 2023).
+  3. La latence atteinte ($\delta_i$) par tranche et le taux de satisfaction QoS moyen ($\eta_b$).
 
-FORMULES MATHÉMATIQUES & CONSTANTES PHYSIQUES :
-----------------------------------------------
-  - Consommation par tranche active i :
-      E_{i,b}^t = c_i^t * (rho_{i,b}^t * psi_i * P_b^dynamic + psi_i * P_b^fixed)
+FORMULES MATHÉMATIQUES & PARAMÈTRES PHYSIQUES :
+------------------------------------------------
+  - Consommation par tranche active $i$ :
+      E_{i,b}^t = c_i^t \cdot (\rho_{i,b}^t \cdot \psi_i \cdot P_b^{\text{dynamic}} + \psi_i \cdot P_b^{\text{fixed}})
       avec :
         * P_static  = 18.0 W   (Puissance statique permanente)
         * P_fixed   = 139.0 W  (Surcoût fixe par tranche active VNF/CNF)
         * P_dynamic = 742.0 W  (Puissance dynamique maximale à 100% de charge)
-        * psi       = {URLLC: 1.4, mMTC: 1.2, eMBB: 1.6, Eco: 1.0} (Coefficients d'amplification)
+        * \psi      = {URLLC: 1.4, mMTC: 1.2, eMBB: 1.6, Eco: 1.0} (Coefficients d'amplification)
 
-  - Satisfaction de Latence (eta) — CORRIGÉ (Option A, fidèle à Phyu et al., Section III-A & Eq. 4) :
-      delta_i est une latence PRÉDÉFINIE, FIXE par slice (« a predefined achievable delay »),
-      PAS une fonction de rho. Deux valeurs fixes par slice :
-        * delta_active[i]  : latence obtenue quand la slice i est ACTIVE (c_i = 1)
-        * delta_eco        : latence obtenue quand le trafic de i est redirigé vers l'EcoSlice
-                             (= 11 ms, valeur exacte de la Table I de l'article pour l'EcoSlice)
-      eta_u = 1.0 si delta_i <= d_u (exigence de latence du service) sinon dégradation graduelle
-      (l'article utilise un seuil strictement binaire, Eq. 4 ; la dégradation graduelle ci-dessous
-      est un choix de shaping de récompense plus doux pour l'entraînement RL, PAS une exigence de
-      l'article — à retirer si vous voulez suivre l'Eq. 4 à la lettre).
-      Exigences d_u : URLLC = 1.0 ms, URLLC_eMBB_MIX = 5.0 ms, eMBB = 10.0 ms, mMTC = 20.0 ms.
-
+  - Satisfaction de Latence ($\eta$) :
+      - Slice ACTIVE   : \delta_i = \delta_{\text{active}}[i] (latence nominale du service < exigence SLA)
+      - Slice ÉTEINTE  : \delta_i = \delta_{\text{eco}} (trafic réacheminé vers l'EcoSlice, ex: 11.0 ms)
+      - \eta_i = 1.0 si \delta_i \le d_i^{\text{SLA}}, sinon dégradation linéaire.
 ====================================================================================================
 """
 
@@ -50,7 +41,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 class RAN_Simulator:
     """
-    Simulateur de Couche Physique et Énergétique RAN 5G/6G.
+    Simulateur de la couche physique et du bilan énergétique d'une station RAN 5G/6G.
     """
 
     def __init__(
@@ -60,14 +51,27 @@ class RAN_Simulator:
         P_fixed: float = 139.0,
         P_dynamic: float = 742.0,
         delta_active: Optional[Dict[str, float]] = None,
-        delta_eco: float = 11.0,
+        delta_eco: float = 25.0,
+        include_ecoslice_in_qos: bool = False,
     ):
+        """
+        Initialise les constantes matérielles et les seuils de latence SLA pour chaque tranche.
+
+        :param tau_minutes: Durée d'un pas de temps en minutes (SADI : Slice Activation Interval).
+        :param P_static: Puissance statique permanente du gNodeB (Watts).
+        :param P_fixed: Puissance fixe par tranche active (Watts).
+        :param P_dynamic: Puissance dynamique maximale à pleine charge (Watts).
+        :param delta_active: Dictionnaire des latences obtenues quand une tranche est active (ms).
+        :param delta_eco: Latence de réacheminement vers l'EcoSlice (ms).
+        :param include_ecoslice_in_qos: Si True, inclut EcoSlice dans la moyenne QoS globale (Option V9).
+        """
         self.tau_minutes = tau_minutes
         self.P_static = P_static
         self.P_fixed = P_fixed
         self.P_dynamic = P_dynamic
+        self.include_ecoslice_in_qos = include_ecoslice_in_qos
 
-        # Coefficients d'amplification énergétique par tranche (psi_i)
+        # Coefficients d'amplification énergétique par tranche (\psi_i)
         self.psi = {
             'URLLC': 1.4,
             'mMTC': 1.2,
@@ -77,30 +81,25 @@ class RAN_Simulator:
             'Eco2': 1.0
         }
 
-        # Exigences de latence SLA utilisateur d_u (ms) — le seuil à respecter
+        # Exigences de latence SLA d_u (ms) par classe de service 5G
         self.d_u_requirements = {
             'URLLC': 1.0,
             'URLLC_eMBB_MIX': 5.0,
             'eMBB': 10.0,
             'mMTC': 20.0,
             'Eco1': 50.0,
-            'Eco2': 50.0
+            'Eco2': 50.0,
         }
 
-        # ── CORRECTION Option A ──
-        # Latence PRÉDÉFINIE et FIXE quand la slice est active (delta_i de l'article,
-        # Section III-A : "a predefined achievable delay"). Choisie confortablement en
-        # dessous de l'exigence d_u correspondante, pour que la slice soit satisfaite
-        # tant qu'elle reste active — exactement l'intention de l'article.
+        # Latences prédéfinies obtenues lorsque la tranche est active (delta_active < d_u)
         self.delta_active = delta_active or {
-            'URLLC': 0.8,           # < exigence 1.0 ms
-            'URLLC_eMBB_MIX': 4.0,  # < exigence 5.0 ms
-            'eMBB': 8.0,            # < exigence 10.0 ms
-            'mMTC': 15.0,           # < exigence 20.0 ms
+            'URLLC': 0.8,           # Conforme aux SLA (1.0 ms)
+            'URLLC_eMBB_MIX': 4.0,  # Conforme aux SLA (5.0 ms)
+            'eMBB': 8.0,            # Conforme aux SLA (10.0 ms)
+            'mMTC': 15.0,           # Conforme aux SLA (20.0 ms)
         }
 
-        # Latence de l'EcoSlice : fixe, indépendante du rho — 11 ms est la valeur EXACTE
-        # de la Table I de l'article pour l'EcoSlice (Facebook/YouTube/Google/EcoSlice = [10,1,15,11]).
+        # Latence fixe subie lors d'une redirection vers l'EcoSlice
         self.delta_eco = delta_eco
 
     def compute_bandwidth_ratio(
@@ -109,10 +108,12 @@ class RAN_Simulator:
         slice_states: Dict[str, int]
     ) -> Tuple[Dict[str, float], Dict[str, float]]:
         """
-        Calcule l'allocation effective du trafic et les ratios de bande passante rho_{i,b}.
-        Le trafic des tranches désactivées (c_i = 0) est basculé vers EcoSlice 1.
-        Utilisé UNIQUEMENT pour le modèle d'énergie (Eq. 2-3 de l'article) — plus du tout
-        pour la latence/QoS depuis la correction Option A.
+        Calcule la charge relative \rho_{i,b} de chaque tranche active.
+        Le trafic des tranches désactivées (c_i = 0) est comptabilisé dans l'EcoSlice 1.
+
+        :param slice_traffic: Dictionnaire du trafic entrant par tranche.
+        :param slice_states: État binaire (0 ou 1) de chaque tranche.
+        :return: Tuple (ratios \rho, trafic effectif par tranche).
         """
         total_traffic = sum(slice_traffic.values())
         if total_traffic <= 0:
@@ -130,11 +131,12 @@ class RAN_Simulator:
                 effective_traffic[s] = 0.0
                 redirected_traffic += traffic
 
-        # EcoSlice 1 absorbe le trafic redirigé
+        # EcoSlice 1 absorbe le trafic orphelin issu des tranches éteintes
         effective_traffic['Eco1'] = effective_traffic.get('Eco1', 0.0) + redirected_traffic
         if 'Eco2' in slice_states and slice_states['Eco2'] == 1:
             effective_traffic['Eco2'] = effective_traffic.get('Eco2', 0.0)
 
+        # Calcul du ratio de charge \rho_{i,b}
         rho = {}
         for s, eff_t in effective_traffic.items():
             rho[s] = eff_t / total_traffic if total_traffic > 0 else 0.0
@@ -146,8 +148,13 @@ class RAN_Simulator:
         rho: Dict[str, float],
         slice_states: Dict[str, int]
     ) -> float:
-        """
-        Calcule la puissance électrique totale consommée en Watts : f_b(t) = sum_i E_{i,b}^t + P_static
+        r"""
+        Calcule la puissance électrique totale consommée par la station en Watts :
+        f_b(t) = P_static + sum_i c_i^t * [ \rho_{i,b}^t * \psi_i * P_dynamic + \psi_i * P_fixed ]
+
+        :param rho: Ratios de charge par tranche.
+        :param slice_states: État d'activation des tranches.
+        :return: Consommation totale en Watts (f_b).
         """
         total_energy = self.P_static
 
@@ -165,17 +172,18 @@ class RAN_Simulator:
         slice_traffic: Dict[str, float],
         slice_states: Dict[str, int]
     ) -> Tuple[float, Dict[str, float], Dict[str, float]]:
-        """
-        Évalue la latence delta_i et le taux de satisfaction QoS eta_b^t.
+        r"""
+        Évalue la latence subie \delta_i et le score de satisfaction QoS \eta_i par tranche,
+        puis calcule la satisfaction globale \eta_b^t (moyenne arithmétique).
 
-        CORRIGÉ (Option A) : delta_i est une constante prédéfinie par slice (Section III-A
-        de l'article), PAS une fonction de rho. Ne dépend que de l'état ON/OFF de la slice :
-          - slice ACTIVE   -> delta_i = self.delta_active[i]  (fixe, < exigence par construction)
-          - slice INACTIVE -> delta_i = self.delta_eco = 11 ms (redirigée vers l'EcoSlice,
-                               valeur exacte de la Table I de l'article)
+        Pourquoi cette logique ?
+        - Tranche active (c_i=1) : latence nominale \delta_{\text{active}} \le d_u \implies \eta_i = 1.0.
+        - Tranche éteinte (c_i=0) : trafic déversé sur EcoSlice avec latence \delta_{\text{eco}}.
+          Si \delta_{\text{eco}} > d_u, la satisfaction se dégrade de façon linéaire.
 
-        Formule finale (Eq. 4 de l'article) :
-          eta_b^t = (1 / |I_b|) * sum_{i in I_b} eta_{i,b}^t
+        :param slice_traffic: Trafic entrant.
+        :param slice_states: État d'activation.
+        :return: Tuple (score QoS moyen \eta_b, dict des scores QoS par tranche, dict des latences par tranche).
         """
         active_slices = [s for s in slice_traffic.keys() if s not in ['Eco1', 'Eco2']]
         if len(active_slices) == 0:
@@ -195,6 +203,7 @@ class RAN_Simulator:
                 qos_slice[s] = 1.0
                 continue
 
+            # Évaluation du respect des exigences SLA de latence
             if achieved_delay <= req_delay:
                 satisfaction = 1.0
             else:
@@ -202,7 +211,19 @@ class RAN_Simulator:
 
             qos_slice[s] = satisfaction
 
-        # Ligne 17 du PDF : Moyenne arithmétique équitable entre les slices
+        # Prise en compte facultative de l'EcoSlice dans la moyenne (Option V9)
+        if self.include_ecoslice_in_qos:
+            for eco_name in ['Eco1', 'Eco2']:
+                is_eco_active = slice_states.get(eco_name, 1 if eco_name == 'Eco1' else 0) == 1
+                if not is_eco_active:
+                    continue
+                req_delay = self.d_u_requirements.get(eco_name, 50.0)
+                satisfaction = 1.0 if self.delta_eco <= req_delay else max(
+                    0.0, 1.0 - (self.delta_eco - req_delay) / req_delay)
+                qos_slice[eco_name] = satisfaction
+                delta_slice[eco_name] = self.delta_eco
+
+        # Moyenne arithmétique équitable de la satisfaction QoS sur les tranches evaluated
         overall_qos = float(np.mean(list(qos_slice.values()))) if len(qos_slice) > 0 else 1.0
         return overall_qos, qos_slice, delta_slice
 
@@ -214,15 +235,20 @@ class RAN_Simulator:
         slice_states: Dict[str, int]
     ) -> Dict[str, Any]:
         """
-        Avance d'un pas de temps de 10 minutes et retourne le bilan d'énergie et de QoS.
+        Simule une étape temporelle de 10 minutes et renvoie le bilan énergétique et QoS.
+
+        :param timestamp: Horodatage courant.
+        :param subnet_id: Identifiant de la station RAN.
+        :param slice_traffic: Trafic par tranche.
+        :param slice_states: Actions d'activation décidées.
+        :return: Dictionnaire des résultats physiques (f_b, eta_b, rho, qos_slice, delta_slice).
         """
-        # S'assurer que EcoSlice 1 est toujours activée
+        # EcoSlice 1 est maintenue active par défaut comme tranche de secours principale
         slice_states_adj = slice_states.copy()
         slice_states_adj['Eco1'] = 1
 
         rho, effective_traffic = self.compute_bandwidth_ratio(slice_traffic, slice_states_adj)
         f_b = self.compute_energy_consumption(rho, slice_states_adj)
-        # CORRIGÉ : compute_qos_satisfaction prend maintenant slice_states (pas rho)
         eta_b, qos_slice, delta_slice = self.compute_qos_satisfaction(slice_traffic, slice_states_adj)
 
         return {

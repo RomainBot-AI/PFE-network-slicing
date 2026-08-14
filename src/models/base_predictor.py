@@ -6,21 +6,14 @@
  OBJET  : Classe de Base Abstraite pour tous les Prédicteurs de Trafic Réseau
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Définit l'interface standardisée pour les modèles de prédiction de trafic.
-Cette architecture abstraite permet d'interchanger en toute transparence :
-  1. PassthroughPredictor (Équivalent oracle/réallocation dynamique pure)
-  2. RidgePredictor (Régression Ridge supervisée)
-  3. LSTMPredictor (Réseau de neurones récurrent PyTorch LSTM)
-  4. NHiTSPredictor (Architecture neuronale multi-échelle N-HiTS)
-
-FONCTIONS DE L'INTERFACE :
---------------------------
-  - fit(df_train_pivoted) : Entraîne le modèle sur le Train Set sans fuite temporelle.
-  - predict_pivoted(df_pivoted, df_context) : Prédit le trafic futur l_hat^{t+1} pas-à-pas.
-  - evaluate(df_pivoted, df_context) : Calcule la MAE, la RMSE et la NMAE normalisée (%).
-
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Définit l'interface standardisée pour l'ensemble des modèles de prédiction de trafic.
+Tous les prédicteurs (Passthrough, Ridge, LightGBM, LSTM, N-HiTS, Prophet) héritent de cette classe.
+Cette abstraction garantit :
+  1. Une méthode `fit` uniforme pour l'apprentissage sur les données pivotées.
+  2. Une méthode `predict_pivoted` produisant un DataFrame enrichi des colonnes `pred_<slice_name>`.
+  3. Une méthode `evaluate` calculant de manière homogène les métriques d'erreur MAE, RMSE et NMAE (%).
 ====================================================================================================
 """
 
@@ -31,13 +24,17 @@ from typing import Dict, List, Optional, Tuple
 
 class BaseTrafficPredictor:
     """
-    Interface Abstraite pour les Prédicteurs de Trafic Réseau.
+    Interface abstraite définissant le contrat d'exécution des modèles de prédiction de trafic.
     """
     def __init__(self):
         self.slice_names: List[str] = []
 
-    def fit(self, df_train_pivoted: pd.DataFrame):
-        """Entraîne le modèle sur les données pivotées d'entraînement."""
+    def fit(self, df_train_pivoted: pd.DataFrame) -> None:
+        """
+        Entraîne le modèle sur les données pivotées d'entraînement.
+
+        :param df_train_pivoted: DataFrame pivoté contenant l'historique de trafic par tranche.
+        """
         pass
 
     def predict_pivoted(
@@ -45,7 +42,13 @@ class BaseTrafficPredictor:
         df_pivoted: pd.DataFrame,
         df_context: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
-        """Prédit le trafic pour tous les pas de temps dans df_pivoted."""
+        """
+        Prédit le trafic futur pas-à-pas pour l'ensemble du DataFrame d'entrée.
+
+        :param df_pivoted: DataFrame pivoté contenant le trafic courant.
+        :param df_context: Contexte historique optionnel pour les modèles tabulaires à fenêtre glissante.
+        :return: DataFrame copie enrichie des colonnes de prédiction `pred_<slice_name>`.
+        """
         raise NotImplementedError("La méthode predict_pivoted doit être implémentée.")
 
     def evaluate(
@@ -53,7 +56,18 @@ class BaseTrafficPredictor:
         df_pivoted: pd.DataFrame,
         df_context: Optional[pd.DataFrame] = None
     ) -> Dict[str, float]:
-        """Évalue les métriques MAE, RMSE et NMAE (%) entre trafic réel et prédit."""
+        """
+        Calcule les métriques d'erreur standardisées : MAE, RMSE et NMAE (%).
+
+        Pourquoi le NMAE (%) ?
+        Le Normalized Mean Absolute Error ramène l'erreur MAE en pourcentage par rapport
+        au trafic maximal observé (max_actual), ce qui permet de comparer équitablement la précision
+        entre des stations ou des tranches de volumes très différents.
+
+        :param df_pivoted: DataFrame de trafic réel.
+        :param df_context: Contexte historique glissant.
+        :return: Dictionnaire des scores d'erreur {'MAE': ..., 'RMSE': ..., 'NMAE': ...}.
+        """
         df_pred = self.predict_pivoted(df_pivoted, df_context=df_context)
         actuals, preds = [], []
 
@@ -66,8 +80,8 @@ class BaseTrafficPredictor:
 
         mae = float(np.mean(np.abs(preds - actuals)))
         rmse = float(np.sqrt(np.mean((preds - actuals) ** 2)))
-        
-        # Normalisation NMAE (%) par rapport à la valeur maximale observée
+
+        # Normalisation NMAE (%) par rapport au pic maximal observé
         max_actual = float(np.max(actuals)) if len(actuals) > 0 and np.max(actuals) > 0 else 1.0
         nmae = (mae / max_actual) * 100.0
 

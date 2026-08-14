@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ====================================================================================================
  MODULE : src/environment/sdn_controller_env.py
- OBJET  : Environnement d'Apprentissage par Renforcement SDN à Double Contrôleur (Multi-RAN / Multi-Subnets)
+ OBJET  : Environnement Gymnasium du Contrôleur SDN à Double Niveau (Multi-RAN / Multi-Subnets)
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Cet environnement (compatible avec l'interface OpenAI Gym) implémente les 4 Algorithmes
-du Double Contrôleur SDN décrits dans le document d'architecture pour une ou plusieurs stations RAN :
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Cet environnement encapsule la logique de décision du réseau et sert d'interface entre :
+  - Le prédicteur de trafic (`src/models/base_predictor.py`) qui fournit les prédictions \hat{l}^{t+1}.
+  - L'agent RL PPO (`src/agents/ppo_agent.py`) qui choisit l'action d'activation binaire c_init^t.
+  - Le moteur physique RAN (`src/simulator/ran_simulator.py`) qui évalue la consommation et la QoS.
 
-  - Algorithme 1 (PPO Decision) :
-      Reçoit l'action binaire c_init^t de l'agent PPO pour les slices spécialisées.
-      Impose l'activation permanente d'EcoSlice 1 (c_eco1 = 1).
+CHAÎNE DÉCISIONNELLE EN 4 ALGORITHMES SDN :
+-------------------------------------------
+  - Algorithme 1 (Décision PPO) :
+      Reçoit l'action brute c_{init}^t de l'agent PPO. Maintient EcoSlice 1 toujours active.
 
-  - Algorithme 2 (SDN 1 Threshold Filter) :
-      Éteint les slices dont le trafic est sous le seuil d'extinction propre à chaque station b :
-        l_{i,b}^t < alpha_seuil * Max_{i,b}  (Max_{i,b} basé sur le 95e percentile du subnet b).
-      Redirige le trafic orphelin vers le vecteur V_rediriger.
+  - Algorithme 2 (Filtre des Seuils Prédictifs SDN 1 & Veto URLLC) :
+      Compare la prédiction \hat{l}_{i,b}^{t+1} au seuil \alpha_{\text{seuil}} \cdot \text{Max}_{i,b}.
+      Éteint la tranche si c_{i,\text{init}}^t = 0 ou si la prédiction est sous le seuil.
+      Applique un Veto URLLC déterministe qui réactive la tranche URLLC si du trafic réel est détecté.
 
-  - Algorithme 3 (SDN 2 Priority Routing & Eco2) :
-      Trie V_rediriger par ordre de priorité décroissante (URLLC > URLLC_eMBB_MIX > mMTC > eMBB).
-      Remplit EcoSlice 1 jusqu'à sa capacité C_eco1.
-      Si la charge d'EcoSlice 1 dépasse 75% (Seuil75 = 0.75 * C_eco1), active **EcoSlice Bis** (c_eco2 = 1).
-      Si EcoSlice Bis déborde à son tour (charge > C_eco2), déclenche l'alerte Surcharge = Vrai.
+  - Algorithme 3 (Routage Prioritaire & EcoSlice Bis - SDN 2) :
+      Trie le trafic orphelin par priorité (URLLC > MIX > mMTC > eMBB) et le déverse dans EcoSlice 1.
+      Si EcoSlice 1 dépasse 75% de sa capacité, allume EcoSlice Bis (c_{\text{eco2}} = 1).
 
-  - Algorithme 4 (SDN 2 Safety Fallback, Allocations & Loss Rate) :
-      En cas de surcharge ou d'atteinte critique à URLLC, rallume la slice d'origine du flux majeur.
-      Calcule le gain énergétique Delta E(t), le taux de perte L(t) et le taux de satisfaction QoS eta_b^t
-      selon l'Étape 4 (Ligne 17 du PDF).
-
+  - Algorithme 4 (Sécurité & Calcul de la Récompense PPO) :
+      Rallume la tranche la plus lourde en cas de surcharge.
+      Calcule le score QoS \eta_b^t, le taux de perte L_t, et la récompense multi-objectif r_t :
+        r_t = \frac{1000.0}{f_b(t)} + \beta \cdot \eta_b(t) - \lambda \cdot L_t
 ====================================================================================================
 """
 
@@ -45,7 +45,7 @@ from src.models.passthrough_predictor import PassthroughTrafficPredictor
 
 class SDN_DoubleController_Env:
     """
-    Environnement SDN à Double Contrôleur pour le RAN Slicing 5G/6G (Support Multi-RAN / Multi-Subnets).
+    Environnement SDN à Double Contrôleur pour l'optimisation énergétique et QoS du RAN 5G/6G.
     """
 
     def __init__(
@@ -55,26 +55,61 @@ class SDN_DoubleController_Env:
         slice_names: Optional[List[str]] = None,
         df_context: Optional[pd.DataFrame] = None,
         alpha_seuil: float = 0.01,
-        capacity_eco1: float = 2500000.0,
-        capacity_eco2: float = 2500000.0,
+        capacity_eco1: Optional[float] = None,
+        capacity_eco2: Optional[float] = None,
         seuil_75_ratio: float = 0.75,
         beta: float = 10.0,
         lambda_loss: float = 50.0,
-        seed: int = 42
+        seed: int = 42,
+        ran_ids: Optional[List[int]] = None
     ):
+        """
+        Initialise l'environnement, calibre les capacités EcoSlice et précalcule les valeurs de pic Max_i.
+
+        :param df_traffic: DataFrame du trafic réseau d'entrée.
+        :param predictor: Prédicteur de trafic instancié (par défaut Passthrough).
+        :param slice_names: Noms des tranches dédiées à gérer.
+        :param df_context: DataFrame de contexte d'historique pour les prédicteurs tabulaires.
+        :param alpha_seuil: Coefficient du seuil d'extinction prédictif (ex: 0.01 = 1% du pic).
+        :param capacity_eco1: Capacité d'EcoSlice 1 (autocalibrée sur le p95 si None).
+        :param capacity_eco2: Capacité d'EcoSlice Bis (autocalibrée sur le p95 si None).
+        :param seuil_75_ratio: Ratio de déclenchement d'EcoSlice Bis (0.75 = 75%).
+        :param beta: Poids de la satisfaction QoS dans la récompense PPO.
+        :param lambda_loss: Pénalité de perte / surcharge dans la récompense PPO.
+        :param seed: Graine aléatoire.
+        :param ran_ids: Identifiants des Macro-RANs (pour le codage One-Hot de l'état).
+        """
         self.df_traffic = df_traffic.copy()
         self.alpha_seuil = alpha_seuil
-        self.capacity_eco1 = capacity_eco1
-        self.capacity_eco2 = capacity_eco2
-        self.seuil_75 = seuil_75_ratio * capacity_eco1
+
+        # Auto-calibration des capacités EcoSlice sur le 95e percentile du trafic total instantané
+        if capacity_eco1 is None or capacity_eco2 is None:
+            _tmp_piv = self.df_traffic.copy()
+            if 'slice' in _tmp_piv.columns and 'y' in _tmp_piv.columns:
+                _tmp_piv = _tmp_piv.pivot_table(
+                    index=['ds', 'id_institution_subnet'],
+                    columns='slice', values='y',
+                    aggfunc='sum', fill_value=0.0
+                ).reset_index()
+            _traffic_cols = [c for c in _tmp_piv.columns if c not in ['ds', 'id_institution_subnet']]
+            _total_per_step = _tmp_piv[_traffic_cols].sum(axis=1)
+            _p95 = float(_total_per_step.quantile(0.95))
+            _auto_cap = max(_p95, 1.0)
+            self.capacity_eco1 = capacity_eco1 if capacity_eco1 is not None else _auto_cap
+            self.capacity_eco2 = capacity_eco2 if capacity_eco2 is not None else _auto_cap
+        else:
+            self.capacity_eco1 = capacity_eco1
+            self.capacity_eco2 = capacity_eco2
+
+        self.seuil_75 = seuil_75_ratio * self.capacity_eco1
         self.beta = beta
         self.lambda_loss = lambda_loss
         self.seed = seed
 
         np.random.seed(seed)
-        self.ran_sim = RAN_Simulator()
+        self.ran_sim = RAN_Simulator(include_ecoslice_in_qos=True)
 
-        # Pivotement des données brutes
+        # Pivotement de la table pour disposer d'un vecteur de trafic par pas de temps et subnet
         if 'slice' in self.df_traffic.columns and 'y' in self.df_traffic.columns:
             self.pivoted = self.df_traffic.pivot_table(
                 index=['ds', 'id_institution_subnet'],
@@ -94,35 +129,34 @@ class SDN_DoubleController_Env:
             if s not in self.pivoted.columns:
                 self.pivoted[s] = 0.0
 
-        # ── CORRECTION (Fix 2) : Max_i causal, jamais de fuite du futur ──
-        # Avant : un seul 95e percentile calculé une fois sur TOUT self.pivoted
-        # (train + test confondus) -> le seuil d'extinction pouvait être influencé
-        # par un pic de trafic qui n'existe que dans la période de test, ce qu'un
-        # vrai contrôleur déployé ne pourrait jamais connaître à l'avance.
-        # Maintenant : Max_i est une série qui varie dans le temps, calculée sur une
-        # fenêtre glissante des pas de temps PASSÉS uniquement (décalée d'un pas),
-        # par sous-réseau (station RAN).
-        self.max_i_window = 1008  # ~7 jours à 10 min — ajustez si votre pas de temps diffère
+        # Calcul causal glissant du pic Max_i (fenêtre passée de 7 jours, décalée d'un pas pour éviter toute fuite)
+        self.max_i_window = 1008
         self.Max_i_subnet = {}
         unique_subnets = self.pivoted['id_institution_subnet'].unique()
+
+        # Identification unique des Macro-RANs pour le vecteur One-Hot de l'état PPO
+        self.unique_subnet_ids = sorted(int(s) for s in ran_ids) if ran_ids is not None \
+            else sorted(int(s) for s in unique_subnets)
+        self.subnet_id_to_idx = {sid: i for i, sid in enumerate(self.unique_subnet_ids)}
+
         for sub_id in unique_subnets:
             sub_df = (self.pivoted[self.pivoted['id_institution_subnet'] == sub_id]
                       .set_index('ds').sort_index())
             rolling_max_i = sub_df[self.slice_names].rolling(
                 window=self.max_i_window, min_periods=1
             ).quantile(0.95)
-            # décalage d'un pas : au pas t, on ne connaît que les pics jusqu'à t-1
+            # Décalage d'un pas (shift) pour garantir l'absence stricte de fuite du futur
             rolling_max_i = rolling_max_i.shift(1).fillna(sub_df[self.slice_names].iloc[0])
             self.Max_i_subnet[sub_id] = rolling_max_i
 
-        # Prédicteur par défaut Passthrough (Oracle) si non spécifié
+        # Prédicteur de trafic (Passthrough par défaut si non fourni)
         if predictor is None:
             self.predictor = PassthroughTrafficPredictor()
             self.predictor.fit(self.pivoted)
         else:
             self.predictor = predictor
 
-        # Précalcul des prédictions de trafic avec contexte glissant
+        # Inférence batch des prédictions sur la période de simulation
         self.pivoted_pred = self.predictor.predict_pivoted(self.pivoted, df_context=df_context)
 
         self.current_step_idx = 0
@@ -131,19 +165,55 @@ class SDN_DoubleController_Env:
         self.past_eta_b = 0.95
 
     def reset(self) -> np.ndarray:
+        """
+        Réinitialise l'environnement au pas 0 et renvoie l'état initial.
+        """
         self.current_step_idx = 0
         self.past_f_b = 1000.0
         self.past_eta_b = 0.95
         return self._get_state(0)
 
     def _get_state(self, step_idx: int) -> np.ndarray:
-        row_pred = self.pivoted_pred.iloc[step_idx]
-        pred_traffic_vector = [float(row_pred.get(f'pred_{s}', row_pred.get(s, 0.0))) for s in self.slice_names]
+        """
+        Construit le vecteur d'état S_t normalisé pour l'agent PPO :
+          - Consommation passée f_b / 2000.0 (ramenée à ~[0,1])
+          - Satisfaction QoS passée \eta_b \in [0,1]
+          - Trafic futur prédit ramené à sa charge relative \hat{l} / Max_i \in [0,1]
+          - Vector One-Hot identifiant le Macro-RAN courant.
 
-        state = [self.past_f_b / 2000.0, self.past_eta_b] + pred_traffic_vector
+        :param step_idx: Pas de temps courant.
+        :return: Tableau NumPy 1D normalisé.
+        """
+        row_real = self.pivoted.iloc[step_idx]
+        row_pred = self.pivoted_pred.iloc[step_idx]
+        current_subnet_id = int(row_real['id_institution_subnet'])
+
+        station_max_i_series = self.Max_i_subnet.get(current_subnet_id)
+        ts = row_real['ds']
+        if station_max_i_series is not None and ts in station_max_i_series.index:
+            station_max_i = station_max_i_series.loc[ts].to_dict()
+        else:
+            station_max_i = next(iter(self.Max_i_subnet.values())).iloc[0].to_dict()
+
+        # Normalisation du trafic prédit par rapport au pic Max_i
+        pred_traffic_vector = [
+            float(row_pred.get(f'pred_{s}', row_pred.get(s, 0.0))) / max(station_max_i.get(s, 1.0), 1.0)
+            for s in self.slice_names
+        ]
+
+        # Codage One-Hot de la station RAN
+        ran_onehot = [1.0 if current_subnet_id == sid else 0.0 for sid in self.unique_subnet_ids]
+
+        state = [self.past_f_b / 2000.0, self.past_eta_b] + pred_traffic_vector + ran_onehot
         return np.array(state, dtype=np.float32)
 
     def step_controller(self, raw_action_dict: Dict[str, int]) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+        """
+        Exécute la chaîne décisionnelle complète en 4 algorithmes pour une étape temporelle.
+
+        :param raw_action_dict: Action brute c_{init} générée par l'agent PPO.
+        :return: Tuple (nouvel état, récompense, flag de fin, dictionnaire info).
+        """
         row_real = self.pivoted.iloc[self.current_step_idx]
         ts = row_real['ds']
         subnet_id = int(row_real['id_institution_subnet'])
@@ -152,12 +222,10 @@ class SDN_DoubleController_Env:
         row_pred = self.pivoted_pred.iloc[self.current_step_idx]
         l_pred = {s: float(row_pred.get(f'pred_{s}', row_pred.get(s, 0.0))) for s in self.slice_names}
 
-        # Obtenir les pics Max_i de la station RAN spécifique, AU TEMPS ts (causal)
         station_max_i_series = self.Max_i_subnet.get(subnet_id)
         if station_max_i_series is not None and ts in station_max_i_series.index:
             station_max_i = station_max_i_series.loc[ts].to_dict()
         else:
-            # repli si le timestamp n'est pas trouvé (ne devrait pas arriver en usage normal)
             first_series = next(iter(self.Max_i_subnet.values()))
             station_max_i = first_series.iloc[0].to_dict()
 
@@ -167,25 +235,31 @@ class SDN_DoubleController_Env:
         c_init = {s: raw_action_dict.get(s, 1) for s in self.slice_names}
         c_init['Eco1'] = 1
 
-        # Protection URLLC : Si du trafic URLLC est présent, forcer c_init['URLLC'] = 1
         if l_real.get('URLLC', 0.0) > 10.0:
             c_init['URLLC'] = 1
 
         # ---------------------------------------------------------------------
-        # Algorithme 2 : Filtrage SDN 1 Seuil (alpha_seuil * Max_{i,b})
+        # Algorithme 2 : Filtrage SDN 1 Seuil PRÉDICTIF (\alpha_{seuil} * Max_{i,b})
         # ---------------------------------------------------------------------
         c_filtre = {}
         V_rediriger = {}
 
         for s in self.slice_names:
-            threshold = self.alpha_seuil * station_max_i.get(s, 1.0)
-            if c_init[s] == 0 or l_real[s] < threshold:
+            max_i_s = station_max_i.get(s, 1.0)
+            threshold = self.alpha_seuil * max_i_s
+            # Extinction si demandée par PPO, ou si prédiction <= seuil, ou si tranche inactive historiquement
+            if c_init[s] == 0 or l_pred[s] <= threshold or max_i_s <= 0:
                 c_filtre[s] = 0
                 V_rediriger[s] = l_real[s]
             else:
                 c_filtre[s] = 1
 
         c_filtre['Eco1'] = 1
+
+        # Veto déterministe URLLC : réactivation forcée si du trafic réel est mesuré
+        if l_real.get('URLLC', 0.0) > 10.0 and c_filtre.get('URLLC', 1) == 0:
+            c_filtre['URLLC'] = 1
+            V_rediriger.pop('URLLC', None)
 
         # ---------------------------------------------------------------------
         # Algorithme 3 : Routage et Débordement (Contrôleur SDN 2)
@@ -218,7 +292,7 @@ class SDN_DoubleController_Env:
         c_final['Eco1'] = 1
         c_final['Eco2'] = c_eco2
 
-        # Lignes 2-6 du PDF : Rallumage d'urgence du flux le plus lourd si Surcharge
+        # Rallumage d'urgence de la tranche la plus lourde si surcharge détectée
         if surcharge:
             non_eco_active = [s for s in self.slice_names if c_final[s] == 1]
             if len(non_eco_active) < len(self.slice_names):
@@ -231,22 +305,20 @@ class SDN_DoubleController_Env:
                     c_final[heaviest_slice] = 1
                     l_eco1_b = max(0.0, l_eco1_b - l_real[heaviest_slice])
 
-        # Moteur Physique RAN
+        # Calcul physique (consommation f_b et satisfaction QoS \eta_b)
         res_step = self.ran_sim.step(ts, subnet_id, l_real, c_final)
         f_b_t = res_step['f_b']
         eta_b_t = res_step['eta_b']
 
-        # Station All-Active pour calculer Delta E(t)
+        # Calcul du référentiel All-Active pour déterminer le gain d'énergie \Delta E(t)
         all_active = {s: 1 for s in self.slice_names}
         all_active['Eco1'] = 1
         all_active['Eco2'] = 0
         res_base = self.ran_sim.step(ts, subnet_id, l_real, all_active)
         f_b_base = res_base['f_b']
 
-        # Ligne 11 du PDF : Gain Énergétique Delta E(t)
         delta_E_t = max(0.0, (f_b_base - f_b_t) / f_b_base) if f_b_base > 0 else 0.0
-        
-        # Lignes 12-16 du PDF : Taux de perte L(t)
+
         total_eco_traffic = l_eco1_b + l_eco2_b
         if surcharge and total_eco_traffic > 0:
             L_t = max(0.0, (total_eco_traffic - (self.capacity_eco1 + self.capacity_eco2)) / total_eco_traffic)
@@ -255,8 +327,8 @@ class SDN_DoubleController_Env:
 
         qos_violation = (eta_b_t < 1.0) or (L_t > 0.0)
 
-        # Fonction de Récompense PPO r_t
-        reward = (1.0 / f_b_t) + (self.beta * eta_b_t) - (self.lambda_loss * L_t)
+        # Calcul de la récompense multi-objectif r_t
+        reward = (1000.0 / f_b_t) + (self.beta * eta_b_t) - (self.lambda_loss * L_t)
 
         self.past_f_b = f_b_t
         self.past_eta_b = eta_b_t

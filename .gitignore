@@ -1,9 +1,61 @@
+# Python / Cache
 __pycache__/
+*.py[cod]
+*$py.class
 .venv/
+env/
+venv/
+.pytest_cache/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Reports & HTML files
 *.html
-ancienne_version
-data/plots*
+*.pdf
+*.tex
+
+# LaTeX auxiliary build files
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.bbl
+*.blg
+*.lof
+*.lot
+
+# Data & Output directories / Archives
+data/experiments/
+data/experiments_v*/
+data/plots/
+data/plots*/
+data/artifacts/
+*.csv
+*.zip
+*.tar.gz
+
+# Backup directories & old versions
+ancienne_version/
 srcv2ancienne_version/
+srcv3_backup/
+srcv4_versionqui focntionne correspond a la v3/
+zzzzz/
+
+# Temporary / Scratch scripts & draft text files
+*.sh
+*.txt
+extract_clustering_info.py
+fix_table_ran.py
+generate_html.py
+restore_history_part2.py
+simplify_v8_tables.py
+update_part2_final.py
+update_script.py
 test/
 test.ipynb
-*.csv

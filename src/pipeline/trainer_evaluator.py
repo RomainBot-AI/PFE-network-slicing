@@ -6,16 +6,16 @@
  OBJET  : Pipeline d'Entraînement, d'Évaluation & de Benchmark Multi-Modèles (Multi-RAN & Macro-RAN)
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Orchestre l'exécution séquentielle :
-  1. Chargement et pivotement du dataset (Support 1 subnet, topN subnets, ALL 69 subnets ou K Macro-RANs).
-  2. Division 80/20 Train/Test (chronologique sans fuite temporelle).
-  3. Entraînement du Prédicteur sélectionné (Passthrough, Ridge, LightGBM, LSTM, N-HiTS).
-  4. Entraînement de l'agent PPO avec suivi en direct normalisé (QoS en %, Énergie en kWh, NMAE %).
-  5. Évaluation et génération des graphiques comparatifs.
-  6. Si 'all' est sélectionné : Exécute TOUS les modèles à la suite et affiche un BENCHMARK global !
-
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module est l'orchestrateur central du projet.
+Invoqué depuis `main.py`, il supervise l'ensemble du cycle de vie expérimental :
+  1. Préparation des données (Support subnets bruts ou agrégation K Macro-RANs via `src/pipeline/macro_ran.py`).
+  2. Split chronologique Train / Test (80% / 20%) sans fuite temporelle.
+  3. Ajustement du modèle de prédiction de trafic (`fit` et `evaluate`).
+  4. Calibration des capacités EcoSlice sur le Train Set et propagation figée vers l'environnement Test.
+  5. Boucle d'entraînement PPO (`is_train=True`, mode stochastique) et évaluation (`is_train=False`, mode déterministe).
+  6. Génération automatisée de l'ensemble des figures et graphiques comparatifs (`src/visualization/plot_generator.py`).
 ====================================================================================================
 """
 
@@ -28,12 +28,14 @@ from typing import Dict, Any, List, Optional
 from src.environment.sdn_controller_env import SDN_DoubleController_Env
 from src.agents.ppo_agent import PPOAgent
 from src.models.predictor_factory import get_traffic_predictor, AVAILABLE_MODELS
-from src.visualization.plot_generator import generate_all_plots, generate_comparison_plot
+from src.visualization.plot_generator import generate_all_plots, generate_comparison_plot, generate_comparison_per_ran_plot
 from src.pipeline.macro_ran import build_subnet_to_macro_map, aggregate_to_macro_rans
 
 
-def log_info(msg: str):
-    """Affiche un message de log formaté avec horodatage dans le terminal."""
+def log_info(msg: str) -> None:
+    """
+    Affiche un message de log formaté avec horodatage standard dans le terminal.
+    """
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
     print(f"{now_str} [INFO] {msg}", flush=True)
 
@@ -49,22 +51,38 @@ def run_single_model_pipeline(
     log_freq: int = 1000
 ) -> Dict[str, Any]:
     """
-    Exécute le pipeline complet pour un modèle spécifique (Support Multi-RAN / Macro-RAN).
+    Exécute le pipeline complet pour un modèle prédicteur unique.
+
+    :param model_name: Nom du modèle prédicteur ('lightgbm', 'lstm', 'nhits', 'prophet', 'passthrough').
+    :param subnet_choice: Sélection des subnets ('all', 'top5', 'top10' ou ID spécifique).
+    :param num_rans: Nombre de Macro-RANs pour le regroupement spatial (0 = subnets bruts, 4 = Macro-RANs).
+    :param max_steps: Nombre maximal de pas de temps par épisode (None = tout le dataset).
+    :param episodes: Nombre d'épisodes d'entraînement de l'agent PPO.
+    :param beta: Poids de la satisfaction QoS dans la récompense PPO.
+    :param lambda_loss: Pénalité de perte / surcharge dans la récompense PPO.
+    :param log_freq: Fréquence d'affichage des logs dans la console.
+    :return: Dictionnaire synthétique des métriques obtenues sur le jeu de test.
     """
-    dataset_path = "/home/cytech/Ing3/PFE/dataset_creation/subnet_slice_traffic_min2016_dense.csv"
-    data_plots_dir = "/home/cytech/Ing3/PFE/dataset_creation/data/plots"
-    artifacts_dir = "/home/cytech/.gemini/antigravity-ide/brain/1226dc74-d762-40ab-8e24-6bb17ec42424"
+    # Répertoire racine du projet dérivé dynamiquement par rapport à l'emplacement du fichier
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    dataset_path = os.environ.get("DATASET_PATH", os.path.join(project_root, "subnet_slice_traffic_min2016_dense.csv"))
+    if not os.path.exists(dataset_path):
+        dataset_path = os.path.join(project_root, "subnet_slice_traffic_min2016_dense.csv")
+
+    data_plots_dir = os.path.join(project_root, "data", "plots")
+    artifacts_dir = os.path.join(project_root, "data", "artifacts")
 
     os.makedirs(data_plots_dir, exist_ok=True)
     os.makedirs(artifacts_dir, exist_ok=True)
 
     log_info(f"Chargement du dataset {os.path.basename(dataset_path)} (Subnet = '{subnet_choice}', Num_Rans = {num_rans})...")
 
-    # 1. Chargement du dataset brut
+    # 1. Ingestion du dataset de trafic
     df_raw = pd.read_csv(dataset_path)
     num_subnets_total = df_raw['id_institution_subnet'].nunique()
 
-    # Si num_rans > 0, regrouper les 69 subnets en K Macro-RANs par clustering K-means / quantiles
+    # Si num_rans > 0, regrouper les 69 subnets en K Macro-RANs régionaux
+    macro_map = None
     if num_rans > 0:
         log_info(f"Mode Macro-RAN Activé : Regroupement et somme des {num_subnets_total} subnets en {num_rans} Macro-RANs !")
         macro_map = build_subnet_to_macro_map(df_raw, num_rans=num_rans)
@@ -110,10 +128,10 @@ def run_single_model_pipeline(
     total_rows = len(pivoted_full)
     split_idx = int(0.80 * total_rows)
 
+    # Split chronologique 80/20 pour préserver l'ordre temporel strict sans fuite
     df_train_pivoted = pivoted_full.iloc[:split_idx].copy()
     df_test_pivoted = pivoted_full.iloc[split_idx:].copy()
 
-    # Restriction facultative sur le nombre de pas de temps
     if max_steps and max_steps > 0:
         df_train_pivoted = df_train_pivoted.iloc[:max_steps].copy()
         df_test_pivoted = df_test_pivoted.iloc[:min(max_steps, len(df_test_pivoted))].copy()
@@ -126,7 +144,7 @@ def run_single_model_pipeline(
     num_subnets_loaded = pivoted_full['id_institution_subnet'].nunique()
     log_info(f"Dataset Multi-RAN ({num_subnets_loaded} RANs) : Train = {len(df_train_pivoted)} pas, Test = {len(df_test_pivoted)} pas")
 
-    # 2. Entraînement du Prédicteur
+    # 2. Entraînement et Évaluation du Prédicteur
     log_info(f"=== ENTRAÎNEMENT DU PRÉDICTEUR [{model_name.upper()}] ===")
     predictor = get_traffic_predictor(model_name=model_name)
     predictor.fit(df_train_pivoted)
@@ -139,23 +157,26 @@ def run_single_model_pipeline(
 
     global_slice_names = sorted([c for c in pivoted_full.columns if c not in ['ds', 'id_institution_subnet']])
 
-    # 3. Environnements SDN avec hyperparamètres de pondération QoS (beta & lambda_loss)
+    # 3. Instanciation des Environnements SDN (Train et Test)
+    # Les capacités EcoSlice (capacity_eco1/eco2) sont autocalibrées sur env_train puis transmises figées à env_test
     env_train = SDN_DoubleController_Env(
         df_train_raw, predictor=predictor, slice_names=global_slice_names,
         beta=beta, lambda_loss=lambda_loss, seed=42
     )
     env_test = SDN_DoubleController_Env(
         df_test_raw, predictor=predictor, slice_names=global_slice_names,
-        df_context=df_train_pivoted, beta=beta, lambda_loss=lambda_loss, seed=42
+        df_context=df_train_pivoted, beta=beta, lambda_loss=lambda_loss, seed=42,
+        capacity_eco1=env_train.capacity_eco1, capacity_eco2=env_train.capacity_eco2,
+        ran_ids=env_train.unique_subnet_ids
     )
 
-    # 4. Agent PPO
+    # 4. Instanciation de l'Agent PPO
     state_sample = env_train.reset()
     agent = PPOAgent(state_dim=len(state_sample), action_dim=len(global_slice_names), lr=5e-4)
 
-    # 5. Boucle d'Entraînement PPO (Multi-Épisodes) & Suivi Normalisé dans le Terminal
+    # 5. Entraînement PPO (Stochastique) & Évaluation Test (Déterministe p_i >= 0.5)
     log_info(f"=== ENTRAÎNEMENT PPO [{model_name.lower()}] (beta={beta}, lambda={lambda_loss}) : {episodes} épisode(s) × {env_train.max_steps} pas ===")
-    
+
     train_history = []
     for ep in range(episodes):
         ep_history = run_loop(
@@ -179,12 +200,21 @@ def run_single_model_pipeline(
     energy_gain_test = df_test_res['delta_E_t'].mean() * 100.0
     qos_test = df_test_res['eta_b_t'].mean()
 
-    # 6. Génération des Visualisations
+    # 6. Génération des figures et artefacts
     generate_all_plots(
         df_train_res, df_test_res, global_slice_names, data_plots_dir, artifacts_dir,
         model_name=model_name, beta=beta, lambda_loss=lambda_loss,
-        num_rans=num_rans if num_rans > 0 else 1, num_subnets=num_subnets_total
+        num_rans=num_rans if num_rans > 0 else 1, num_subnets=num_subnets_total,
+        macro_map=macro_map
     )
+
+    per_ran_metrics = {}
+    if 'subnet_id' in df_test_res.columns:
+        for subnet_id, group in df_test_res.groupby('subnet_id'):
+            per_ran_metrics[subnet_id] = {
+                'energy_gain': group['delta_E_t'].mean() * 100.0,
+                'qos': group['eta_b_t'].mean()
+            }
 
     results = {
         'model_name': model_name,
@@ -198,7 +228,8 @@ def run_single_model_pipeline(
         'qos_test': qos_test,
         'mae_test': eval_metrics['MAE'],
         'nmae_test': eval_metrics['NMAE'],
-        'rmse_test': eval_metrics['RMSE']
+        'rmse_test': eval_metrics['RMSE'],
+        'per_ran_metrics': per_ran_metrics
     }
 
     return results
@@ -214,11 +245,13 @@ def run_all_models_pipeline(
     log_freq: int = 1000
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Exécute et compare TOUS les modèles disponibles (passthrough, ridge, lightgbm, lstm, nhits) sur le réseau Multi-RAN.
-    Génère un tableau comparatif final et un graphique d'analyse comparative !
+    Exécute le pipeline pour TOUS les modèles prédicteurs et génère les graphiques comparatifs globaux.
+
+    :return: Dictionnaire regroupant les résultats de tous les modèles.
     """
-    data_plots_dir = "/home/cytech/Ing3/PFE/dataset_creation/data/plots"
-    artifacts_dir = "/home/cytech/.gemini/antigravity-ide/brain/1226dc74-d762-40ab-8e24-6bb17ec42424"
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    data_plots_dir = os.path.join(project_root, "data", "plots")
+    artifacts_dir = os.path.join(project_root, "data", "artifacts")
 
     results_summary = {}
     log_info(f"=== BENCHMARK GLOBAL MULTI-RAN SUR TOUS LES MODÈLES (subnets={subnet_choice}, num_rans={num_rans}, beta={beta}, lambda={lambda_loss}) ===")
@@ -230,6 +263,7 @@ def run_all_models_pipeline(
         )
         results_summary[m] = res
 
+    # Synthèse texte sous forme de tableau terminal
     print("\n" + "=" * 105)
     print(f" TABLEAU COMPARATIF FINAL BENCHMARK MODÈLES MULTI-RAN (SUBNET = '{subnet_choice}', NUM_RANS = {num_rans}) ")
     print("=" * 105)
@@ -240,7 +274,7 @@ def run_all_models_pipeline(
         print(f"{m.upper():<18} | {r['nmae_test']:<11.2f}% | {r['energy_opt_test']:<16.2f} W | {r['energy_gain_test']:<16.2f} % | {r['qos_test']*100:<18.2f} %")
     print("=" * 105)
 
-    # Générer la figure comparative
+    # Génération des deux figures comparatives globales (générale et par Macro-RAN)
     first_res = list(results_summary.values())[0] if len(results_summary) > 0 else {}
     generate_comparison_plot(
         results_summary, data_plots_dir, artifacts_dir,
@@ -248,21 +282,39 @@ def run_all_models_pipeline(
         num_rans=num_rans if num_rans > 0 else 1,
         num_subnets=first_res.get('num_subnets_total', 69)
     )
+
+    generate_comparison_per_ran_plot(
+        results_summary, data_plots_dir, artifacts_dir,
+        beta=beta, lambda_loss=lambda_loss,
+        num_rans=num_rans if num_rans > 0 else 1,
+        num_subnets=first_res.get('num_subnets_total', 69)
+    )
+
     return results_summary
 
 
 def run_loop(
-    env,
-    agent,
+    env: SDN_DoubleController_Env,
+    agent: PPOAgent,
     model_name: str = "passthrough",
     is_train: bool = True,
     ep_idx: int = 0,
     episodes: int = 1,
     log_freq: int = 1000,
     update_interval: int = 64
-):
+) -> List[Dict[str, Any]]:
     """
-    Boucle d'exécution d'un épisode avec affichage des métriques normalisées (kWh, QoS %, NMAE %).
+    Exécute la boucle pas-à-pas sur un épisode complet et affiche le suivi terminal.
+
+    :param env: Environnement SDN.
+    :param agent: Agent PPO.
+    :param model_name: Nom du modèle courant.
+    :param is_train: True pour la phase d'entraînement (stochastique), False pour l'évaluation (déterministe).
+    :param ep_idx: Index de l'épisode courant.
+    :param episodes: Nombre total d'épisodes.
+    :param log_freq: Fréquence des logs console.
+    :param update_interval: Nombre de pas entre chaque mise à jour PPO (batching GAE).
+    :return: Historique complet sous forme de liste de dictionnaires.
     """
     state = env.reset()
     history = []
@@ -271,7 +323,8 @@ def run_loop(
     total_wh = 0.0
 
     for step_i in range(env.max_steps):
-        action_binary, log_prob, val = agent.select_action(state)
+        # Mode déterministe lors du test (is_train=False) pour éliminer le bruit d'échantillonnage aléatoire
+        action_binary, log_prob, val = agent.select_action(state, deterministic=not is_train)
         raw_action_dict = {s: int(action_binary[idx]) for idx, s in enumerate(sorted(env.slice_names))}
 
         next_state, reward, done, info = env.step_controller(raw_action_dict)
@@ -284,7 +337,7 @@ def run_loop(
             values.append(val)
             dones.append(done)
 
-        # Calcul de l'énergie en Wh (pas de 10 min = 1/6 h)
+        # Calcul de la consommation cumulée en Watt-heures (1 pas = 10 min = 1/6h)
         step_wh = info['f_b_t'] * (10.0 / 60.0)
         total_wh += step_wh
 
@@ -314,18 +367,19 @@ def run_loop(
         history.append(step_log)
         state = next_state
 
+        # Mise à jour périodique des poids de l'agent PPO pendant l'entraînement
         if is_train and (step_i + 1) % update_interval == 0:
             agent.update(states, actions, log_probs, rewards, values, dones)
             states, actions, log_probs, rewards, values, dones = [], [], [], [], [], []
 
-        # Affichage normalisé dans le terminal à chaque intervalle `log_freq` ou à la fin
+        # Affichage du suivi dans le terminal à chaque log_freq
         if (step_i == 0) or ((step_i + 1) % log_freq == 0) or done:
             recent_logs = history[-log_freq:] if len(history) >= log_freq else history
             avg_reward = float(np.mean([l['reward'] for l in recent_logs]))
             avg_power = float(np.mean([l['f_b_t'] for l in recent_logs]))
             avg_eco = float(np.mean([l['delta_E_t'] for l in recent_logs])) * 100.0
             avg_qos = float(np.mean([l['eta_b_t'] for l in recent_logs])) * 100.0
-            total_kwh = total_wh / 1000.0  # Conversion Wh -> kWh
+            total_kwh = total_wh / 1000.0
 
             mode_label = f"{model_name.lower()}"
             if episodes > 1:

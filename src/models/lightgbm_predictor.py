@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ====================================================================================================
  MODULE : src/models/lightgbm_predictor.py
  OBJET  : Prédicteur Multi-Échelle de Trafic par LightGBM (Gradient Boosting)
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Modèle LightGBM prédisant la demande de trafic pour la PROCHAINE HEURE (horizon = 6 pas de 10 min)
-en combinant 3 ÉCHELLES TEMPORELLES :
-  1. Court terme (30 dernières minutes) : Lags t, t-1, t-2
-  2. Moyen terme (24 heures)            : Lag t-144, Moyenne 24h, Max 24h
-  3. Long terme (7 jours)               : Lag t-1008 (même heure le même jour la semaine passée)
-  4. Features calendaires               : Heure du jour (0-23), Jour semaine (0-6), Week-end (0/1)
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module implémente le modèle prédicteur basé sur LightGBM (Gradient Boosted Decision Trees).
+Il s'insère dans le pipeline d'inférence (`src/models/predictor_factory.py`) et fournit au
+contrôleur SDN (`src/environment/sdn_controller_env.py`) la prédiction de trafic futur \hat{l}^{t+1}.
 
+CARACTÉRISTIQUES CLÉS & INGÉNIERIE DE FEATURES :
+------------------------------------------------
+  1. Combinaison de 3 échelles temporelles :
+     - Court terme (30 min)  : Lags t, t-1, t-2.
+     - Moyen terme (24h)     : Lag t-144, Moyenne glissante 24h, Max glissant 24h.
+     - Long terme (7 jours)  : Lag t-1008 (saisonnalité hebdomadaire).
+     - Features calendaires  : Heure du jour (0-23), jour de la semaine (0-6), indicateur week-end.
+
+  2. Entraînement Indépendant par couple (tranche, station) :
+     Un modèle LightGBM distinct est entraîné pour chaque station Macro-RAN afin d'éviter
+     toute contamination croisée entre stations à profils de trafic divergents (ex: station rurale vs urbaine).
 ====================================================================================================
 """
 
@@ -27,20 +35,25 @@ from src.models.base_predictor import BaseTrafficPredictor
 
 class LightGBMTrafficPredictor(BaseTrafficPredictor):
     """
-    Prédicteur de Trafic Multi-Échelle basé sur LightGBM.
-    Prédit le trafic maximal anticipé pour la prochaine heure (6 pas de 10 min).
+    Prédicteur de trafic multi-échelle basé sur LightGBM.
     """
 
     def __init__(self, horizon: int = 6, short_lags: int = 3):
+        """
+        :param horizon: Horizon de prédiction (6 pas de 10 min = 1 heure).
+        :param short_lags: Nombre de lags récents à inclure (3 pas = 30 minutes).
+        """
         super().__init__()
-        self.horizon = horizon           # Prochaine heure (6 pas de 10 min)
-        self.short_lags = short_lags    # 3 pas (30 min)
-        self.lag_24h = 144               # 24h = 144 pas de 10 min
-        self.lag_7d = 1008               # 7 jours = 1008 pas de 10 min
-        self.models: Dict[str, lgb.LGBMRegressor] = {}
+        self.horizon = horizon
+        self.short_lags = short_lags
+        self.lag_24h = 144  # 24 heures (144 pas de 10 min)
+        self.lag_7d = 1008  # 7 jours (1008 pas de 10 min)
+        self.models: Dict[Tuple[str, Optional[int]], lgb.LGBMRegressor] = {}
 
     def _extract_calendar_features(self, timestamp) -> List[float]:
-        """Extrait [hour, dayofweek, is_weekend] d'un timestamp."""
+        """
+        Extrait les caractéristiques temporelles [heure, jour_semaine, est_weekend] du timestamp.
+        """
         try:
             ts = pd.to_datetime(timestamp)
             return [float(ts.hour), float(ts.dayofweek), 1.0 if ts.dayofweek >= 5 else 0.0]
@@ -54,42 +67,49 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
         is_train: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Extrait la matrice X multi-échelles et le vecteur cible y (max de la prochaine heure).
+        Construit la matrice de features X et le vecteur cible y pour une série temporelle donnée,
+        en veillant à l'alignement temporel strict (prédiction de la ligne i faite à partir du passé i-1).
+
+        :param series: Tableau 1D des valeurs de trafic.
+        :param ds_values: Tableau 1D des timestamps.
+        :param is_train: Flag indiquant la phase d'apprentissage ou d'inférence.
+        :return: Tuple (matrice X, vecteur y).
         """
         n = len(series)
         X_list, y_list = [], []
 
-        min_idx = self.short_lags
-        max_idx = (n - self.horizon) if is_train else n
+        min_idx = self.short_lags + 1
+        max_idx = n
 
         for i in range(min_idx, max_idx):
+            ref = i - 1  # Référence stricte au passé
             feat = []
 
-            # 1. Échelle Court Terme (30 dernières minutes : t, t-1, t-2)
+            # 1. Échelle Court Terme (30 dernières minutes : ref, ref-1, ref-2)
             for l in range(self.short_lags):
-                idx_lag = i - l
-                feat.append(float(series[idx_lag]) if idx_lag >= 0 else float(series[i]))
+                idx_lag = ref - l
+                feat.append(float(series[idx_lag]) if idx_lag >= 0 else float(series[ref]))
 
-            # 2. Échelle Moyen Terme (24 heures = 144 pas)
-            idx_24h = i - self.lag_24h
-            feat.append(float(series[idx_24h]) if idx_24h >= 0 else float(series[i]))
-            
+            # 2. Échelle Moyen Terme (24 heures)
+            idx_24h = ref - self.lag_24h
+            feat.append(float(series[idx_24h]) if idx_24h >= 0 else float(series[ref]))
+
             # Statistiques glissantes 24h (Moyenne & Max)
-            start_24h = max(0, i - self.lag_24h + 1)
-            window_24h = series[start_24h : i + 1]
-            feat.append(float(np.mean(window_24h)) if len(window_24h) > 0 else float(series[i]))
-            feat.append(float(np.max(window_24h)) if len(window_24h) > 0 else float(series[i]))
+            start_24h = max(0, ref - self.lag_24h + 1)
+            window_24h = series[start_24h: ref + 1]
+            feat.append(float(np.mean(window_24h)) if len(window_24h) > 0 else float(series[ref]))
+            feat.append(float(np.max(window_24h)) if len(window_24h) > 0 else float(series[ref]))
 
-            # 3. Échelle Long Terme (7 jours = 1008 pas)
-            idx_7d = i - self.lag_7d
+            # 3. Échelle Long Terme (7 jours)
+            idx_7d = ref - self.lag_7d
             if idx_7d >= 0:
                 feat.append(float(series[idx_7d]))
             elif idx_24h >= 0:
                 feat.append(float(series[idx_24h]))
             else:
-                feat.append(float(series[i]))
+                feat.append(float(series[ref]))
 
-            # 4. Features Calendaires (Heure, Jour semaine, Week-end)
+            # 4. Features Calendaires associées au pas cible i
             if ds_values is not None and i < len(ds_values):
                 cal_f = self._extract_calendar_features(ds_values[i])
                 feat.extend(cal_f)
@@ -99,27 +119,24 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
             X_list.append(feat)
 
             if is_train:
-                # Cible : Trafic maximal de la PROCHAINE HEURE (6 pas de 10 min)
-                future_window = series[i + 1 : i + 1 + self.horizon]
-                target_val = float(np.max(future_window)) if len(future_window) > 0 else float(series[i])
-                y_list.append(target_val)
+                y_list.append(float(series[i]))
 
         X_arr = np.array(X_list, dtype=np.float32) if len(X_list) > 0 else np.empty((0, 11), dtype=np.float32)
         y_arr = np.array(y_list, dtype=np.float32) if len(y_list) > 0 else np.empty((0,), dtype=np.float32)
 
         return X_arr, y_arr
 
-    def fit(self, df_train_pivoted: pd.DataFrame):
+    def fit(self, df_train_pivoted: pd.DataFrame) -> None:
+        """
+        Entraîne un modèle LightGBM distinct par couple (tranche, station Macro-RAN).
+        """
         df_piv = df_train_pivoted.copy().reset_index(drop=True)
         self.slice_names = [c for c in df_piv.columns if c not in ['ds', 'id_institution_subnet']]
         has_ds = 'ds' in df_piv.columns
 
-        # Traitement séparé par station (si multi-subnet/RAN)
         stations = df_piv['id_institution_subnet'].unique() if 'id_institution_subnet' in df_piv.columns else [None]
 
         for slice_name in self.slice_names:
-            X_all_stations, y_all_stations = [], []
-
             for st in stations:
                 if st is not None:
                     df_st = df_piv[df_piv['id_institution_subnet'] == st]
@@ -130,20 +147,16 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
                 ds_st = df_st['ds'].values if has_ds else None
 
                 X_st, y_st = self.extract_features_for_series(series_st, ds_values=ds_st, is_train=True)
-                if len(X_st) > 0:
-                    X_all_stations.append(X_st)
-                    y_all_stations.append(y_st)
+                if len(X_st) < 2:
+                    continue
 
-            if len(X_all_stations) > 0:
-                X_train = np.vstack(X_all_stations)
-                y_train = np.concatenate(y_all_stations)
-
+                min_child = min(15, len(X_st))
                 model = lgb.LGBMRegressor(
                     n_estimators=300,
                     max_depth=7,
                     learning_rate=0.08,
                     num_leaves=63,
-                    min_child_samples=15,
+                    min_child_samples=min_child,
                     subsample=0.85,
                     colsample_bytree=0.85,
                     reg_alpha=0.1,
@@ -152,14 +165,17 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
                     verbose=-1,
                     importance_type='gain'
                 )
-                model.fit(X_train, y_train)
-                self.models[slice_name] = model
+                model.fit(X_st, y_st)
+                self.models[(slice_name, st)] = model
 
     def predict_pivoted(
         self,
         df_pivoted: pd.DataFrame,
         df_context: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
+        """
+        Génère les prédictions de trafic futures `pred_<slice_name>` pour chaque pas de temps.
+        """
         df_piv = df_pivoted.copy().reset_index(drop=True)
         df_res = df_piv.copy()
 
@@ -173,12 +189,6 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
         df_ctx_clean = df_context.copy().reset_index(drop=True) if df_context is not None else None
 
         for slice_name in self.slice_names:
-            if slice_name not in self.models:
-                df_res[f'pred_{slice_name}'] = df_res[slice_name]
-                continue
-
-            model = self.models[slice_name]
-
             for st in stations:
                 if st is not None:
                     idx_st = df_res[df_res['id_institution_subnet'] == st].index
@@ -188,6 +198,11 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
                     idx_st = df_res.index
                     df_st = df_piv
                     df_ctx_st = df_ctx_clean
+
+                model = self.models.get((slice_name, st))
+                if model is None:
+                    df_res.loc[idx_st, f'pred_{slice_name}'] = df_st[slice_name]
+                    continue
 
                 series = df_st[slice_name].values
                 ds_vals = df_st['ds'].values if has_ds else None
@@ -217,6 +232,7 @@ class LightGBMTrafficPredictor(BaseTrafficPredictor):
                         first_val = preds_target[0] if len(preds_target) > 0 else series[0]
                         preds_target = np.concatenate([np.full(pad_len, first_val), preds_target])
 
+                    # Tronquage au seuil 0.0 pour éviter les prédictions de trafic négatives
                     df_res.loc[idx_st, f'pred_{slice_name}'] = np.maximum(0.0, preds_target[:len(idx_st)])
                 else:
                     df_res.loc[idx_st, f'pred_{slice_name}'] = series

@@ -3,20 +3,14 @@
 """
 ====================================================================================================
  MODULE : src/models/predictor_factory.py
- OBJET  : Usine à Modèles (Factory Pattern) pour l'Instanciation des Prédicteurs
+ OBJET  : Usine à Modèles (Factory Pattern) pour l'Instanciation des Prédicteurs de Trafic
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Permet d'instancier facilement n'importe quel prédicteur de trafic à l'aide d'une clé de texte :
-  - 'passthrough' : Réallocation dynamique pure vs Baseline All-Active
-  - 'lightgbm'    : LightGBM Gradient Boosting (features multi-échelles & calendaires)
-  - 'lstm'        : Réseau PyTorch LSTM
-  - 'nhits'       : Réseau PyTorch N-HiTS
-  - 'prophet'     : Modèle Temporel Meta Prophet (tendance & saisonnalité)
-  - 'ridge'       : Régression Ridge supervisée
-  - 'all'         : Exécute la comparaison de TOUS les modèles !
-
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module centralise la création et le dispatching des prédicteurs de trafic.
+Il est invoqué par l'orchestrateur du projet (`src/pipeline/trainer_evaluator.py`) pour instancier
+dynamiquement le modèle choisi via l'argument CLI `--model` (`passthrough`, `lightgbm`, `lstm`, `nhits`, `prophet`).
 ====================================================================================================
 """
 
@@ -33,7 +27,12 @@ AVAILABLE_MODELS = ['passthrough', 'lightgbm', 'lstm', 'nhits', 'prophet']
 
 def get_traffic_predictor(model_name: str = "passthrough", **kwargs) -> BaseTrafficPredictor:
     """
-    Instancie le prédicteur de trafic correspondant.
+    Instancie le prédicteur de trafic correspondant au nom fourni.
+
+    :param model_name: Clé du modèle ('passthrough', 'lightgbm', 'lstm', 'nhits', 'prophet', 'ridge').
+    :param kwargs: Arguments optionnels passés au constructeur du modèle.
+    :return: Instance d'une sous-classe de BaseTrafficPredictor.
+    :raises ValueError: Si la clé du modèle n'est pas reconnue.
     """
     key = model_name.lower()
     if key == "passthrough":

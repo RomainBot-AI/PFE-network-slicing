@@ -2,51 +2,30 @@
 # -*- coding: utf-8 -*-
 """
 ====================================================================================================
- PROJET PFE : SIMULATION DE NETWORK SLICING 5G/6G & AGENT PPO (MULTI-RAN / MACRO-RAN)
- FICHIER PRINCIPAL : main.py
+ MODULE : main.py
+ OBJET  : Point d'entrée principal (CLI) pour l'exécution des simulations 5G/6G & PPO
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Point d'entrée principal du projet. Ce script :
-  1. Effectue l'Action Préalable Obligatoire : Inspection sécurisée de quelques lignes aléatoires
-     du dataset 'subnet_slice_traffic_min2016_dense.csv' (~7 millions de lignes) sans tout charger.
-  2. Accepte des arguments en ligne de commande pour configurer la simulation Multi-RAN / Macro-RAN :
-       - python3 main.py --model passthrough   (Choix du modèle : passthrough, ridge, lightgbm, lstm, nhits, all)
-       - python3 main.py --num_rans 4          (Regroupement spatial des 69 subnets en 4 Macro-RANs - Accélération 17x)
-       - python3 main.py --subnet all          (Sélection des subnets : 'all' = les 69 stations, 'top5', 'top10', ou '0')
-       - python3 main.py --steps 5000           (Nombre de pas de temps max par épisode, 0 = tout le dataset)
-       - python3 main.py --episodes 10          (Nombre d'épisodes d'entraînement PPO)
-       - python3 main.py --beta 10.0            (Poids d'importance de la satisfaction QoS dans la récompense)
-       - python3 main.py --lambda_loss 50.0     (Pénalité de violation QoS / surcharge)
-       - python3 main.py --log_freq 1000        (Fréquence d'affichage du suivi dans le terminal)
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce script orchestre l'ensemble du projet via l'interface en ligne de commande (CLI).
+Il s'insère à la racine du projet comme point de départ unique pour :
+  1. Vérifier la présence et la structure du dataset de trafic (`subnet_slice_traffic_min2016_dense.csv`).
+  2. Parser les arguments utilisateurs (choix du modèle prédicteur, découpage spatial Macro-RAN,
+     paramètres de récompense PPO `beta` et `lambda_loss`, nombre d'épisodes, etc.).
+  3. Déclencher le pipeline d'entraînement et d'évaluation via `src/pipeline/trainer_evaluator.py`.
 
-ARBORESCENCE DU PROJET :
-------------------------
-  src/
-  ├── simulator/
-  │   └── ran_simulator.py       # Moteur physique et énergétique 5G/6G (Phyu et al., 2023)
-  ├── environment/
-  │   └── sdn_controller_env.py  # Environnement SDN à Double Contrôleur Multi-RAN (Algorithmes 1 à 4)
-  ├── agents/
-  │   └── ppo_agent.py           # Agent Apprentissage par Renforcement PPO (PyTorch Multi-Binaire)
-  ├── models/
-  │   ├── base_predictor.py      # Interface abstraite (NMAE %, MAE, RMSE)
-  │   ├── passthrough_predictor.py # Oracle / Naive passthrough
-  │   ├── ridge_predictor.py     # Régression Ridge
-  │   ├── lightgbm_predictor.py  # LightGBM Gradient Boosting (features enrichies)
-  │   ├── lstm_predictor.py      # PyTorch LSTM
-  │   ├── nhits_predictor.py     # PyTorch N-HiTS
-  │   └── predictor_factory.py   # Factory usine à modèles
-  ├── pipeline/
-  │   ├── macro_ran.py           # Regroupement et agrégation spatiale en K Macro-RANs (K-means / quantiles)
-  │   └── trainer_evaluator.py   # Orchestrateur Train/Test 80/20 & Benchmark Multi-RAN
-  └── visualization/
-      ├── plot_generator.py      # Générateur des 6 figures et graphique comparatif
-      └── plot_full_dataset.py   # Visualiseur autonome sur tout le dataset (10 mois)
+EXEMPLES D'UTILISATION CLI :
+----------------------------
+  - Exécution avec LightGBM en régime d'équilibre (beta=5.0) :
+      uv run main.py --model lightgbm --num_rans 4 --beta 5.0 --lambda_loss 10.0 --episodes 15
+
+  - Benchmark comparatif de l'ensemble des modèles disponibles :
+      uv run main.py --model all --num_rans 4 --beta 5.0 --lambda_loss 10.0 --episodes 15
 ====================================================================================================
 """
 
+import os
 import sys
 import argparse
 import pandas as pd
@@ -55,28 +34,36 @@ from src.pipeline.trainer_evaluator import run_single_model_pipeline, run_all_mo
 from src.models.predictor_factory import AVAILABLE_MODELS
 
 
-def action_prealable_obligatoire(dataset_path: str):
+def action_prealable_obligatoire(dataset_path: str) -> None:
     """
-    Action Préalable Obligatoire : Inspecte la première ligne et quelques lignes aléatoires
-    du dataset d'entrée sans charger les 7 millions de lignes en mémoire.
+    Effectue une vérification sécurisée du fichier dataset sans charger l'intégralité
+    des 7+ millions de lignes en mémoire.
+
+    Pourquoi cette fonction ?
+    Les fichiers de traces de trafic volumineux peuvent provoquer des dépassements de mémoire (OOM)
+    en cas d'erreur de format. Inspecter les entêtes et un échantillon léger permet de valider
+    la structure du CSV avant de démarrer les simulations.
     """
     print("=" * 90)
     print(" ACTION PRÉALABLE OBLIGATOIRE : INSPECTION SÉCURISÉE DU DATASET ")
     print("=" * 90)
 
-    # 1. Lecture de la toute première ligne pour vérifier les colonnes et le format
+    # 1. Vérification de l'entête et du format des colonnes
     df_head = pd.read_csv(dataset_path, nrows=1)
     print("\n→ 1. Noms des colonnes et structure de la toute première ligne :")
     print(df_head.to_string())
 
-    # 2. Inspection sécurisée d'un petit échantillon aléatoire (10 lignes)
+    # 2. Échantillonnage régulier (skiprows) pour valider des lignes distribuées dans le temps
     df_sample = pd.read_csv(dataset_path, skiprows=lambda i: i > 0 and i % 500000 != 0, nrows=10)
     print("\n→ 2. Échantillon de quelques lignes prélevées dans le dataset :")
     print(df_sample.to_string())
     print("=" * 90 + "\n")
 
 
-def main():
+def main() -> None:
+    """
+    Fonction principale parsant la CLI et lançant le pipeline approprié.
+    """
     parser = argparse.ArgumentParser(
         description="Simulation RAN Network Slicing 5G/6G avec Agent PPO & Contrôleurs SDN Multi-RAN / Macro-RAN."
     )
@@ -90,7 +77,7 @@ def main():
         "--num_rans",
         type=int,
         default=0,
-        help="Regroupement spatial des 69 subnets en K Macro-RANs (ex: --num_rans 4). Accélère l'entraînement 17x tout en conservant 100% du trafic réseau."
+        help="Regroupement spatial des 69 subnets en K Macro-RANs (ex: --num_rans 4). Accélère l'entraînement du trafic réseau."
     )
     parser.add_argument(
         "--subnet",
@@ -130,15 +117,20 @@ def main():
     )
 
     args = parser.parse_args()
-    dataset_path = "/home/cytech/Ing3/PFE/dataset_creation/subnet_slice_traffic_min2016_dense.csv"
 
-    # Action Préalable
+    # Détermination dynamique du répertoire racine du projet
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    dataset_path = os.environ.get("DATASET_PATH", os.path.join(project_root, "subnet_slice_traffic_min2016_dense.csv"))
+    if not os.path.exists(dataset_path):
+        dataset_path = os.path.join(project_root, "subnet_slice_traffic_min2016_dense.csv")
+
+    # Exécution du contrôle préalable de structure
     action_prealable_obligatoire(dataset_path)
 
     max_steps_val = args.steps if args.steps > 0 else None
-
-    # Lancement selon l'argument du modèle
     model_choice = args.model.lower()
+
+    # Dispatching selon l'argument utilisateur : modèle unique ou suite complète de benchmarks
     if model_choice == "all":
         run_all_models_pipeline(
             subnet_choice=args.subnet, num_rans=args.num_rans, max_steps=max_steps_val, episodes=args.episodes,

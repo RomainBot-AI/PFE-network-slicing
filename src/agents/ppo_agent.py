@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ====================================================================================================
  MODULE : src/agents/ppo_agent.py
- OBJET  : Agent d Apprentissage par Renforcement PPO Multi-Binaire PyTorch
+ OBJET  : Agent d'Apprentissage par Renforcement PPO Multi-Binaire en PyTorch
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Implémente l'agent PPO (Proximal Policy Optimization) avec architecture Acteur-Critique en PyTorch.
-  - Acteur Multi-Binaire : Produit une distribution de Bernoulli pour chaque tranche spécialisée (p_i in [0, 1]).
-  - Critique : Estime la fonction de valeur V(s) pour le calcul de l'avantage (GAE - Generalized Advantage Estimation).
-  - PPO Loss : Clipped Surrogate Objective (epsilon = 0.2) + MSE Loss pour le Critique.
-
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module définit l'architecture du réseau de neurones Acteur-Critique et l'agent PPO
+(Proximal Policy Optimization).
+Il s'insère dans l'orchestrateur de simulation (`src/pipeline/trainer_evaluator.py`) :
+  1. À chaque pas de temps t, l'agent prend le vecteur d'état S_t (trafic prédit, consommation
+     et satisfaction passées, one-hot RAN) et génère une probabilité d'activation p_i pour chaque tranche.
+  2. En mode d'entraînement (stochastique), il échantillonne les actions selon une loi de Bernoulli.
+  3. En mode d'évaluation/test (déterministe, p_i >= 0.5), il fige les décisions pour supprimer
+     le bruit d'échantillonnage aléatoire et mesurer la vraie performance de la politique apprise.
+  4. En fin d'épisode, il met à jour les poids via la fonction de perte tronquée PPO et le GAE.
 ====================================================================================================
 """
 
@@ -26,21 +30,29 @@ from typing import Tuple, List, Dict, Any
 
 class ActorCritic(nn.Module):
     """
-    Réseau Neuronal Acteur-Critique PyTorch pour Actions Multi-Binaires.
+    Réseau Neuronal Acteur-Critique PyTorch pour actions Multi-Binaires.
+
+    L'Acteur génère un vecteur de probabilités p_i in [0, 1] (activation des tranches),
+    tandis que le Critique évalue la valeur d'état V(s) pour le calcul de l'avantage.
     """
     def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 64):
+        """
+        :param state_dim: Dimension du vecteur d'état d'entrée S_t.
+        :param action_dim: Nombre de tranches spécialisées à contrôler (ex: 4).
+        :param hidden_dim: Nombre de neurones dans les couches cachées.
+        """
         super().__init__()
-        # Tête Acteur (Politique pi_theta)
+        # Tête Acteur (Politique \pi_\theta)
         self.actor = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
-            nn.Sigmoid()  # Sortie p_i in [0, 1] pour chaque tranche
+            nn.Sigmoid()  # Activation Sigmoid pour obtenir une probabilité p_i \in [0, 1] par tranche
         )
 
-        # Tête Critique (Fonction de valeur V_phi)
+        # Tête Critique (Fonction de valeur V_\phi)
         self.critic = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
@@ -50,6 +62,9 @@ class ActorCritic(nn.Module):
         )
 
     def forward(self, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Passe avant calculant simultanément les probabilités d'action et la valeur d'état.
+        """
         probs = self.actor(state)
         value = self.critic(state)
         return probs, value.squeeze(-1)
@@ -57,7 +72,7 @@ class ActorCritic(nn.Module):
 
 class PPOAgent:
     """
-    Agent PPO pour l'optimisation dynamique des tranches réseau 5G/6G.
+    Agent PPO gérant la sélection d'actions et l'optimisation par rétropropagation.
     """
 
     def __init__(
@@ -71,6 +86,9 @@ class PPOAgent:
         ppo_epochs: int = 4,
         batch_size: int = 64
     ):
+        """
+        Initialise les hyperparamètres de l'agent PPO et instancie l'optimiseur Adam.
+        """
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.gamma = gamma
@@ -82,15 +100,26 @@ class PPOAgent:
         self.policy = ActorCritic(state_dim, action_dim)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
 
-    def select_action(self, state: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    def select_action(self, state: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, float, float]:
         """
-        Échantillonne un vecteur d'actions binaires c_init in {0, 1}^K selon la distribution de Bernoulli.
+        Sélectionne le vecteur d'actions binaires c_{init} \in \{0, 1\}^K.
+
+        Pourquoi la distinction deterministic True / False ?
+        - deterministic=False (Entraînement) : Tirage stochastique selon la distribution de Bernoulli.
+          Indispensable pour favoriser l'exploration du paysage d'actions.
+        - deterministic=True (Évaluation/Test) : Décision stricte par seuillage à 0.5 (c_i = 1 si p_i >= 0.5).
+          Conforme aux standards RL (PPO, OpenAI) pour éliminer le bruit d'échantillonnage
+          et mesurer la vraie performance industrielle de la politique.
+
+        :param state: Vecteur d'état d'entrée.
+        :param deterministic: Si True, utilise le mode déterministe (test).
+        :return: Tuple (action binaire NumPy, log_prob, valeur V(s)).
         """
         state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             probs, value = self.policy(state_t)
             dist = Bernoulli(probs)
-            action = dist.sample()
+            action = (probs >= 0.5).float() if deterministic else dist.sample()
             log_prob = dist.log_prob(action).sum(dim=-1)
 
         action_np = action.squeeze(0).cpu().numpy().astype(np.int32)
@@ -104,9 +133,10 @@ class PPOAgent:
         rewards: List[float],
         values: List[float],
         dones: List[bool]
-    ):
+    ) -> None:
         """
-        Mise à jour des poids PPO via Clipped Loss et GAE.
+        Met à jour les poids du réseau Acteur-Critique à partir de la trajectoire collectée,
+        en utilisant le GAE (Generalized Advantage Estimation) et la perte PPO tronquée (Clipped Objective).
         """
         if len(states) == 0:
             return
@@ -118,7 +148,7 @@ class PPOAgent:
         values_t = torch.tensor(np.array(values), dtype=torch.float32)
         dones_t = torch.tensor(np.array(dones), dtype=torch.float32)
 
-        # Calcul des avantages GAE (Generalized Advantage Estimation)
+        # Calcul récursif de l'avantage GAE (\hat{A}_t^{GAE})
         advantages = torch.zeros_like(rewards_t)
         last_gae = 0.0
 
@@ -129,18 +159,21 @@ class PPOAgent:
             advantages[t] = last_gae = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae
 
         returns_t = advantages + values_t
+        # Normalisation des avantages pour stabiliser le gradient
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        # Optimisation PPO
+        # Époques d'optimisation PPO sur le buffer de trajectoire
         for _ in range(self.ppo_epochs):
             probs, state_values = self.policy(states_t)
             dist = Bernoulli(probs)
             new_log_probs = dist.log_prob(actions_t).sum(dim=-1)
 
+            # Ratio de probabilité r_t(\theta) = \pi_\theta(a|s) / \pi_{\theta_{old}}(a|s)
             ratios = torch.exp(new_log_probs - old_log_probs_t)
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
 
+            # Perte combinée Acteur (Clipped Loss) + Critique (MSE Loss)
             actor_loss = -torch.min(surr1, surr2).mean()
             critic_loss = nn.MSELoss()(state_values, returns_t)
             loss = actor_loss + 0.5 * critic_loss

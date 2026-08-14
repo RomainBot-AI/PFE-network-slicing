@@ -6,11 +6,16 @@
  OBJET  : Prédicteur Supervisé Multi-Échelle par Régression Ridge
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Modèle Ridge basé sur 3 échelles temporelles (court terme 30m, 24h, 7j) prédisant la demande
-de la prochaine heure (6 pas de 10 min).
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module implémente le modèle de baseline de régression linéaire régularisée (Ridge).
+Il s'insère dans l'usine à prédicteurs (`src/models/predictor_factory.py`) comme baseline de régression
+linaire supervisée à faibles coûts de calcul.
 
+CARACTÉRISTIQUES CLÉS :
+-----------------------
+  - Features multi-échelles (30 min, 24h, 7 jours).
+  - Entraînement séparé par couple (tranche, station Macro-RAN) avec régularisation L2 ($\alpha=1.0$).
 ====================================================================================================
 """
 
@@ -23,74 +28,85 @@ from src.models.base_predictor import BaseTrafficPredictor
 
 class MLTrafficPredictor(BaseTrafficPredictor):
     """
-    Prédicteur de Trafic Multi-Échelle basé sur la Régression Ridge.
+    Prédicteur de trafic multi-échelle basé sur la Régression Ridge.
     """
 
     def __init__(self, horizon: int = 6, short_lags: int = 3):
+        """
+        :param horizon: Horizon de prédiction (6 pas de 10 min = 1 heure).
+        :param short_lags: Nombre de lags récents à inclure (3 pas = 30 min).
+        """
         super().__init__()
         self.horizon = horizon
         self.short_lags = short_lags
         self.lag_24h = 144
         self.lag_7d = 1008
-        self.models: Dict[str, Ridge] = {}
+        self.models: Dict[Tuple[str, Optional[int]], Ridge] = {}
 
     def extract_features_for_series(
         self,
         series: np.ndarray,
         is_train: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Construit la matrice de features X et le vecteur cible y pour la régression Ridge.
+
+        :param series: Série brute.
+        :param is_train: Flag d'apprentissage ou d'inférence.
+        :return: Tuple (matrice X, vecteur y).
+        """
         n = len(series)
         X_list, y_list = [], []
 
-        min_idx = self.short_lags
-        max_idx = (n - self.horizon) if is_train else n
+        min_idx = self.short_lags + 1
+        max_idx = n
 
         for i in range(min_idx, max_idx):
+            ref = i - 1  # Alignement causal strict (passé i-1)
             feat = []
 
-            # 1. Court terme (30m)
+            # 1. Court terme (30 min)
             for l in range(self.short_lags):
-                idx_lag = i - l
-                feat.append(float(series[idx_lag]) if idx_lag >= 0 else float(series[i]))
+                idx_lag = ref - l
+                feat.append(float(series[idx_lag]) if idx_lag >= 0 else float(series[ref]))
 
-            # 2. 24h
-            idx_24h = i - self.lag_24h
-            feat.append(float(series[idx_24h]) if idx_24h >= 0 else float(series[i]))
+            # 2. Moyen terme (24h)
+            idx_24h = ref - self.lag_24h
+            feat.append(float(series[idx_24h]) if idx_24h >= 0 else float(series[ref]))
 
-            start_24h = max(0, i - self.lag_24h + 1)
-            window_24h = series[start_24h : i + 1]
-            feat.append(float(np.mean(window_24h)) if len(window_24h) > 0 else float(series[i]))
+            start_24h = max(0, ref - self.lag_24h + 1)
+            window_24h = series[start_24h: ref + 1]
+            feat.append(float(np.mean(window_24h)) if len(window_24h) > 0 else float(series[ref]))
 
-            # 3. 7j
-            idx_7d = i - self.lag_7d
+            # 3. Long terme (7 jours)
+            idx_7d = ref - self.lag_7d
             if idx_7d >= 0:
                 feat.append(float(series[idx_7d]))
             elif idx_24h >= 0:
                 feat.append(float(series[idx_24h]))
             else:
-                feat.append(float(series[i]))
+                feat.append(float(series[ref]))
 
             X_list.append(feat)
 
             if is_train:
-                future_window = series[i + 1 : i + 1 + self.horizon]
-                target_val = float(np.max(future_window)) if len(future_window) > 0 else float(series[i])
-                y_list.append(target_val)
+                y_list.append(float(series[i]))
 
         X_arr = np.array(X_list, dtype=np.float32) if len(X_list) > 0 else np.empty((0, 6), dtype=np.float32)
         y_arr = np.array(y_list, dtype=np.float32) if len(y_list) > 0 else np.empty((0,), dtype=np.float32)
 
         return X_arr, y_arr
 
-    def fit(self, df_train_pivoted: pd.DataFrame):
+    def fit(self, df_train_pivoted: pd.DataFrame) -> None:
+        """
+        Ajuste un modèle Ridge indépendant par couple (tranche, station Macro-RAN).
+        """
         df_piv = df_train_pivoted.copy().reset_index(drop=True)
         self.slice_names = [c for c in df_piv.columns if c not in ['ds', 'id_institution_subnet']]
         has_st = 'id_institution_subnet' in df_piv.columns
         stations = df_piv['id_institution_subnet'].unique() if has_st else [None]
 
         for slice_name in self.slice_names:
-            X_all_stations, y_all_stations = [], []
-
             for st in stations:
                 if st is not None:
                     df_st = df_piv[df_piv['id_institution_subnet'] == st]
@@ -99,23 +115,21 @@ class MLTrafficPredictor(BaseTrafficPredictor):
 
                 series_st = df_st[slice_name].values
                 X_st, y_st = self.extract_features_for_series(series_st, is_train=True)
-                if len(X_st) > 0:
-                    X_all_stations.append(X_st)
-                    y_all_stations.append(y_st)
-
-            if len(X_all_stations) > 0:
-                X_train = np.vstack(X_all_stations)
-                y_train = np.concatenate(y_all_stations)
+                if len(X_st) < 2:
+                    continue
 
                 model = Ridge(alpha=1.0)
-                model.fit(X_train, y_train)
-                self.models[slice_name] = model
+                model.fit(X_st, y_st)
+                self.models[(slice_name, st)] = model
 
     def predict_pivoted(
         self,
         df_pivoted: pd.DataFrame,
         df_context: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
+        """
+        Génère la prédiction de trafic par régression Ridge.
+        """
         df_piv = df_pivoted.copy().reset_index(drop=True)
         df_res = df_piv.copy()
 
@@ -127,12 +141,6 @@ class MLTrafficPredictor(BaseTrafficPredictor):
         df_ctx_clean = df_context.copy().reset_index(drop=True) if df_context is not None else None
 
         for slice_name in self.slice_names:
-            if slice_name not in self.models:
-                df_res[f'pred_{slice_name}'] = df_res[slice_name]
-                continue
-
-            model = self.models[slice_name]
-
             for st in stations:
                 if st is not None:
                     idx_st = df_res[df_res['id_institution_subnet'] == st].index
@@ -142,6 +150,11 @@ class MLTrafficPredictor(BaseTrafficPredictor):
                     idx_st = df_res.index
                     df_st = df_piv
                     df_ctx_st = df_ctx_clean
+
+                model = self.models.get((slice_name, st))
+                if model is None:
+                    df_res.loc[idx_st, f'pred_{slice_name}'] = df_st[slice_name]
+                    continue
 
                 series = df_st[slice_name].values
 

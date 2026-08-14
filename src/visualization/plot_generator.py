@@ -42,7 +42,7 @@ def aggregate_by_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if col == 'timestamp':
             continue
-        elif col in ['total_real_traffic', 'total_pred_traffic', 'f_b_t', 'f_b_base']:
+        elif col in ['total_real_traffic', 'total_pred_traffic', 'f_b_t', 'f_b_base'] or col.startswith('real_') or col.startswith('pred_'):
             agg_rules[col] = 'sum'
         elif col in ['qos_violation', 'surcharge', 'c_eco2'] or col.startswith('c_final_'):
             agg_rules[col] = 'max'
@@ -84,7 +84,8 @@ def generate_all_plots(
     beta: float = 10.0,
     lambda_loss: float = 50.0,
     num_rans: int = 4,
-    num_subnets: int = 69
+    num_subnets: int = 69,
+    macro_map: dict = None
 ):
     """
     Génère et sauvegarde les 6 figures explicatives avec des lignes simples, nettes et épurées.
@@ -145,6 +146,36 @@ def generate_all_plots(
     add_metadata_badge(fig1, beta, lambda_loss, num_rans, num_subnets)
     fig1.tight_layout(rect=[0, 0.03, 1, 1])
     save_fig(fig1, '1_traffic_prediction_train_test.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
+
+    # -------------------------------------------------------------------------
+    # Graphique 1b : Trafic Prédit vs Réel PAR SLICE
+    # -------------------------------------------------------------------------
+    fig1b, axes1b = plt.subplots(len(slice_names), 1, figsize=(16, 2.5 * len(slice_names)), sharex=True)
+    if len(slice_names) == 1: axes1b = [axes1b]
+    
+    for idx, s in enumerate(slice_names):
+        ax = axes1b[idx]
+        real_col, pred_col = f'real_{s}', f'pred_{s}'
+        
+        if real_col in df_test_plt.columns:
+            real_smooth = df_test_plt[real_col].rolling(win_smooth, min_periods=1).mean()
+            ax.plot(time_test, real_smooth, color='#145a32', linewidth=2.0, label='Trafic Réel')
+            
+        if pred_col in df_test_plt.columns and model_name != "passthrough":
+            pred_smooth = df_test_plt[pred_col].rolling(win_smooth, min_periods=1).mean()
+            ax.plot(time_test, pred_smooth, color='#e74c3c', linestyle='--', linewidth=2.0, label='Prédit')
+            
+        ax.set_title(f'Prédiction de Trafic - Slice {s} ({model_name.upper()})', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Trafic (Unités)', fontsize=9)
+        ax.legend(loc='upper right', frameon=True)
+        
+    axes1b[-1].set_xlabel('Horodatage Réel (%d/%m/%Y)', fontsize=10)
+    axes1b[-1].xaxis.set_major_formatter(date_format_year)
+    axes1b[-1].tick_params(axis='x', rotation=25)
+    
+    add_metadata_badge(fig1b, beta, lambda_loss, num_rans, num_subnets)
+    fig1b.tight_layout(rect=[0, 0.03, 1, 1])
+    save_fig(fig1b, '1b_traffic_prediction_per_slice.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
     # Graphique 2 : Timeline de Réallocation Dynamique des Slices (Test Set - Heatmap Matrix)
@@ -333,6 +364,95 @@ def generate_all_plots(
     save_fig(fig5, '5_energy_consumption_train_test.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
     # -------------------------------------------------------------------------
+    # Graphique 2b & 5b : Vues détaillées par RAN (si num_rans > 1)
+    # -------------------------------------------------------------------------
+    unique_subnets = df_test['subnet_id'].unique() if 'subnet_id' in df_test.columns else []
+    
+    if len(unique_subnets) > 1:
+        # Graphique 2b : Timeline par RAN
+        fig2b, axes2b = plt.subplots(len(unique_subnets), 1, figsize=(16, 4.0 * len(unique_subnets)))
+        if len(unique_subnets) == 1: axes2b = [axes2b]
+        
+        for idx, subnet in enumerate(unique_subnets):
+            ax = axes2b[idx]
+            df_sub = df_test[df_test['subnet_id'] == subnet].sort_values(by='timestamp')
+            time_sub = pd.to_datetime(df_sub['timestamp'])
+            
+            act_matrix_sub = []
+            for s in display_slices:
+                col_name = f'c_final_{s}' if s not in ['Eco1', 'Eco2'] else ('c_eco2' if s == 'Eco2' else None)
+                if col_name and col_name in df_sub.columns:
+                    act_matrix_sub.append(df_sub[col_name].values)
+                elif s == 'Eco1':
+                    act_matrix_sub.append(np.ones(len(df_sub)))
+                else:
+                    act_matrix_sub.append(np.zeros(len(df_sub)))
+            
+            act_matrix_sub = np.array(act_matrix_sub)
+            cax = ax.imshow(act_matrix_sub, aspect='auto', cmap='YlGn', interpolation='nearest', vmin=0, vmax=1)
+            ax.set_yticks(np.arange(len(display_slices)))
+            ax.set_yticklabels(display_slices, fontsize=11, fontweight='bold')
+            
+            if len(time_sub) > 0:
+                tick_indices = np.linspace(0, len(time_sub) - 1, min(10, len(time_sub)), dtype=int)
+                tick_labels = [time_sub.iloc[i].strftime('%d/%m/%Y\n%H:%M') for i in tick_indices]
+                ax.set_xticks(tick_indices)
+                ax.set_xticklabels(tick_labels, rotation=0, fontsize=9)
+            
+            sub_str = ""
+            if macro_map:
+                subs = [k for k, v in macro_map.items() if v == subnet]
+                if len(subs) > 0:
+                    subs_txt = ', '.join(map(str, subs))
+                    if len(subs_txt) > 80: subs_txt = subs_txt[:77] + "..."
+                    sub_str = f" - {len(subs)} Subnets originaux: [{subs_txt}]"
+
+            ax.set_title(f'Timeline Macro-RAN {subnet}{sub_str} ({model_name.upper()})', fontsize=11, fontweight='bold')
+            if idx == len(unique_subnets) - 1:
+                ax.set_xlabel('Horodatage Réel (%d/%m/%Y)', fontsize=10)
+                
+        cbar2b = fig2b.colorbar(cax, ax=axes2b, ticks=[0, 1], fraction=0.02, pad=0.04)
+        cbar2b.ax.set_yticklabels(['Désactivé (0)', 'Activé (1)'])
+        add_metadata_badge(fig2b, beta, lambda_loss, num_rans, num_subnets)
+        save_fig(fig2b, '2b_active_slices_per_ran.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
+
+        # Graphique 5b : Énergie par RAN
+        fig5b, axes5b = plt.subplots(len(unique_subnets), 1, figsize=(16, 4.0 * len(unique_subnets)), sharex=True)
+        if len(unique_subnets) == 1: axes5b = [axes5b]
+        
+        for idx, subnet in enumerate(unique_subnets):
+            ax = axes5b[idx]
+            df_sub = df_test[df_test['subnet_id'] == subnet].sort_values(by='timestamp')
+            time_sub = pd.to_datetime(df_sub['timestamp'])
+            
+            base_smooth_sub = df_sub['f_b_base'].rolling(win_smooth, min_periods=1).mean()
+            opt_smooth_sub = df_sub['f_b_t'].rolling(win_smooth, min_periods=1).mean()
+            
+            ax.plot(time_sub, base_smooth_sub, label='Baseline', color='#e74c3c', linestyle='--', linewidth=2.0)
+            ax.plot(time_sub, opt_smooth_sub, label='PPO+SDN', color='#2ecc71', linewidth=2.2)
+            ax.fill_between(time_sub, opt_smooth_sub, base_smooth_sub, color='#2ecc71', alpha=0.25)
+            
+            sub_str = ""
+            if macro_map:
+                subs = [k for k, v in macro_map.items() if v == subnet]
+                if len(subs) > 0:
+                    subs_txt = ', '.join(map(str, subs))
+                    if len(subs_txt) > 80: subs_txt = subs_txt[:77] + "..."
+                    sub_str = f" - {len(subs)} Subnets originaux: [{subs_txt}]"
+
+            ax.set_title(f'Gain Énergétique Macro-RAN {subnet}{sub_str} ({model_name.upper()})', fontsize=11, fontweight='bold')
+            ax.set_ylabel('Puissance (W)', fontsize=10)
+            ax.legend(loc='upper right', frameon=True)
+            
+        axes5b[-1].set_xlabel('Horodatage Réel (%d/%m/%Y)', fontsize=10)
+        axes5b[-1].xaxis.set_major_formatter(date_format_year)
+        axes5b[-1].tick_params(axis='x', rotation=25)
+        
+        add_metadata_badge(fig5b, beta, lambda_loss, num_rans, num_subnets)
+        fig5b.tight_layout(rect=[0, 0.03, 1, 1])
+        save_fig(fig5b, '5b_energy_per_ran.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
+
+    # -------------------------------------------------------------------------
     # Graphique 6 : Convergence de la Récompense Agent PPO
     # -------------------------------------------------------------------------
     fig6, ax6 = plt.subplots(figsize=(16, 4.8))
@@ -353,6 +473,49 @@ def generate_all_plots(
     add_metadata_badge(fig6, beta, lambda_loss, num_rans, num_subnets)
     fig6.tight_layout(rect=[0, 0.03, 1, 1])
     save_fig(fig6, '6_ppo_train_vs_test_performance.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
+
+    # -------------------------------------------------------------------------
+    # Graphique 6b : Convergence de la Récompense PPO par RAN
+    # -------------------------------------------------------------------------
+    unique_subnets = df_test['subnet_id'].unique() if 'subnet_id' in df_test.columns else []
+    if len(unique_subnets) > 1:
+        fig6b, axes6b = plt.subplots(len(unique_subnets), 1, figsize=(16, 4.0 * len(unique_subnets)), sharex=True)
+        if len(unique_subnets) == 1: axes6b = [axes6b]
+        
+        for idx, subnet in enumerate(unique_subnets):
+            ax = axes6b[idx]
+            
+            df_train_sub = df_train[df_train['subnet_id'] == subnet].sort_values(by='timestamp')
+            df_test_sub = df_test[df_test['subnet_id'] == subnet].sort_values(by='timestamp')
+            
+            time_train_sub = pd.to_datetime(df_train_sub['timestamp'])
+            time_test_sub = pd.to_datetime(df_test_sub['timestamp'])
+            
+            r_train_sub = df_train_sub['reward'].rolling(win_smooth, min_periods=1).mean()
+            r_test_sub = df_test_sub['reward'].rolling(win_smooth, min_periods=1).mean()
+            
+            ax.plot(time_train_sub, r_train_sub, label='Récompense (Train Set)', color='#1d6f42', linewidth=2.2)
+            ax.plot(time_test_sub, r_test_sub, label='Récompense (Test Set)', color='#d35400', linewidth=2.2)
+            
+            sub_str = ""
+            if macro_map:
+                subs = [k for k, v in macro_map.items() if v == subnet]
+                if len(subs) > 0:
+                    subs_txt = ', '.join(map(str, subs))
+                    if len(subs_txt) > 80: subs_txt = subs_txt[:77] + "..."
+                    sub_str = f" - {len(subs)} Subnets originaux: [{subs_txt}]"
+                    
+            ax.set_title(f'Récompense PPO Macro-RAN {subnet}{sub_str} ({model_name.upper()})', fontsize=11, fontweight='bold')
+            ax.set_ylabel('Récompense $r_t$', fontsize=10)
+            ax.legend(loc='upper right', frameon=True)
+            
+        axes6b[-1].set_xlabel('Horodatage Réel (%d/%m/%Y)', fontsize=10)
+        axes6b[-1].xaxis.set_major_formatter(date_format_year)
+        axes6b[-1].tick_params(axis='x', rotation=25)
+        
+        add_metadata_badge(fig6b, beta, lambda_loss, num_rans, num_subnets)
+        fig6b.tight_layout(rect=[0, 0.03, 1, 1])
+        save_fig(fig6b, '6b_ppo_reward_per_ran.png', model_dir, artifacts_dir, prefix=f"{model_name.lower()}_")
 
 
 def generate_comparison_plot(
@@ -412,13 +575,86 @@ def generate_comparison_plot(
     fig.tight_layout(rect=[0, 0.03, 1, 1])
     save_fig(fig, '7_benchmark_all_models.png', data_plots_dir, artifacts_dir)
 
+def generate_comparison_per_ran_plot(
+    results_summary: Dict[str, Dict[str, Any]],
+    data_plots_dir: str,
+    artifacts_dir: str,
+    beta: float = 10.0,
+    lambda_loss: float = 50.0,
+    num_rans: int = 4,
+    num_subnets: int = 69
+):
+    """
+    Génère un graphique comparatif récapitulatif entre tous les modèles, mais par station (Macro-RAN).
+    """
+    models = list(results_summary.keys())
+    if not models:
+        return
+        
+    first_res = results_summary[models[0]]
+    if 'per_ran_metrics' not in first_res or not first_res['per_ran_metrics']:
+        return
+        
+    rans = sorted(list(first_res['per_ran_metrics'].keys()))
+    
+    fig, axes = plt.subplots(2, 1, figsize=(16, 12))
+    ax_energy, ax_qos = axes
+    
+    colors = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#e74c3c', '#1abc9c']
+    width = 0.8 / len(models)
+    x = np.arange(len(rans))
+    
+    # 1. Calcul des maximums globaux pour l'échelle dynamique
+    max_e = 20.0
+    max_q = 100.0
+    for m in models:
+        per_ran = results_summary[m].get('per_ran_metrics', {})
+        e_gains = [per_ran.get(r, {}).get('energy_gain', 0.0) for r in rans]
+        q_scores = [per_ran.get(r, {}).get('qos', 1.0) * 100.0 for r in rans]
+        if e_gains: max_e = max(max_e, max(e_gains))
+        if q_scores: max_q = max(max_q, max(q_scores))
+        
+    ax_energy.set_ylim(0, max(10.0, max_e * 1.25))
+    ax_qos.set_ylim(0, min(125.0, max(20.0, max_q * 1.25)))
+    
+    # 2. Tracé des barres groupées et des textes
+    for i, m in enumerate(models):
+        per_ran = results_summary[m].get('per_ran_metrics', {})
+        e_gains = [per_ran.get(r, {}).get('energy_gain', 0.0) for r in rans]
+        q_scores = [per_ran.get(r, {}).get('qos', 1.0) * 100.0 for r in rans]
+        
+        offset = (i - len(models)/2.0 + 0.5) * width
+        
+        ax_energy.bar(x + offset, e_gains, width, label=m.upper(), color=colors[i % len(colors)])
+        ax_qos.bar(x + offset, q_scores, width, label=m.upper(), color=colors[i % len(colors)])
+        
+        # Ajout des pourcentages au-dessus des barres (comme le graphe 7, mais orienté pour éviter le chevauchement)
+        for j, (eg, qs) in enumerate(zip(e_gains, q_scores)):
+            ax_energy.text(x[j] + offset, eg + (max_e * 0.02), f"{eg:.1f}%", ha='center', va='bottom', fontsize=8, fontweight='bold', rotation=90)
+            ax_qos.text(x[j] + offset, qs + (max_q * 0.02), f"{qs:.1f}%", ha='center', va='bottom', fontsize=8, fontweight='bold', rotation=90)
+        
+    ax_energy.set_title('Gain Énergétique par Macro-RAN', fontsize=12, fontweight='bold')
+    ax_energy.set_ylabel('Gain Énergie (%)', fontsize=11)
+    ax_energy.set_xticks(x)
+    ax_energy.set_xticklabels([f"RAN {r}" for r in rans])
+    ax_energy.legend(loc='upper right')
+    ax_energy.grid(True, linestyle='--', alpha=0.5, axis='y')
+    
+    ax_qos.set_title('Satisfaction QoS par Macro-RAN', fontsize=12, fontweight='bold')
+    ax_qos.set_ylabel('QoS (%)', fontsize=11)
+    ax_qos.set_xticks(x)
+    ax_qos.set_xticklabels([f"RAN {r}" for r in rans])
+    ax_qos.legend(loc='lower right')
+    ax_qos.grid(True, linestyle='--', alpha=0.5, axis='y')
+    
+    fig.suptitle("BENCHMARK COMPARATIF 7B : GAIN & QoS PAR STATION (MACRO-RAN)", fontsize=14, fontweight='bold')
+    add_metadata_badge(fig, beta, lambda_loss, num_rans, num_subnets)
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
+    save_fig(fig, '7b_benchmark_per_ran.png', data_plots_dir, artifacts_dir)
 
-def save_fig(fig, filename, target_dir, artifacts_dir, prefix: str = ""):
+
+def save_fig(fig, filename, target_dir, *args, **kwargs):
     os.makedirs(target_dir, exist_ok=True)
-    os.makedirs(artifacts_dir, exist_ok=True)
-
     path_data = os.path.join(target_dir, filename)
-    path_artifact = os.path.join(artifacts_dir, f"{prefix}{filename}")
     fig.savefig(path_data, dpi=300)
-    fig.savefig(path_artifact, dpi=300)
     plt.close(fig)

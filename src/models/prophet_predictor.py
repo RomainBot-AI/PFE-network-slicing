@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ====================================================================================================
  MODULE : src/models/prophet_predictor.py
- OBJET  : Prédicteur de Trafic basé sur Prophet (Meta Time Series Model)
+ OBJET  : Prédicteur de Trafic Réseau basé sur Meta Prophet (Time Series Model)
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Ce module implémente un prédicteur de trafic basé sur Meta Prophet.
-Prophet modélise les tendances et la saisonnalité (journalière et hebdomadaire).
-Entraîne un modèle Prophet séparé par station/subnet et par slice pour une échelle exacte.
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module implémente le prédicteur basé sur Meta Prophet (`ProphetTrafficPredictor`).
+Il s'insère dans l'usine à modèles (`src/models/predictor_factory.py`) et fournit la prédiction
+de trafic futur \hat{l}^{t+1} au contrôleur SDN.
 
+CARACTÉRISTIQUES CLÉS & CONFIGURATION :
+----------------------------------------
+  1. Décomposition Additive : Modélise la tendance et les saisonnalités journalières et hebdomadaires.
+  2. Option `growth='flat'` : Empêche l'extrapolation linéaire de tendance à long terme qui provoquerait
+     des dérives explosives sur 7 mois d'écart temporal.
+  3. Modèle Séparé par (tranche, station) : Entraîné indépendamment pour chaque sous-réseau afin de capter
+     les rythmes de trafic locaux sans contamination.
 ====================================================================================================
 """
 
@@ -23,26 +30,29 @@ import warnings
 
 from src.models.base_predictor import BaseTrafficPredictor
 
-# Supprimer les warnings de Prophet/Stan pendant la simulation
+# Ignorer les avertissements de conciliation Stan/Prophet dans les logs
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 class ProphetTrafficPredictor(BaseTrafficPredictor):
     """
-    Prédicteur de Trafic 5G basé sur Meta Prophet.
-    Prédit le trafic maximal anticipé sur l'horizon de 1 heure (6 pas de 10 min) station par station.
+    Prédicteur de trafic 5G basé sur Meta Prophet.
     """
 
     def __init__(self, horizon: int = 6, max_train_samples: int = 2016):
+        """
+        :param horizon: Horizon de prédiction (6 pas de 10 min = 1 heure).
+        :param max_train_samples: Nombre maximal de pas d'historique conservés pour l'ajustement (2016 pas = 14 jours).
+        """
         super().__init__()
         self.horizon = horizon
-        self.max_train_samples = max_train_samples  # 2 semaines max par station pour rapidité
+        self.max_train_samples = max_train_samples
         self.models: Dict[Tuple[str, int], Prophet] = {}
 
-    def fit(self, df_train_pivoted: pd.DataFrame):
+    def fit(self, df_train_pivoted: pd.DataFrame) -> None:
         """
-        Ajuste un modèle Prophet indépendant pour chaque tranche réseau (slice) et chaque station.
+        Ajuste un modèle Meta Prophet indépendant par couple (tranche, station Macro-RAN).
         """
         df_piv = df_train_pivoted.copy().reset_index(drop=True)
         self.slice_names = [c for c in df_piv.columns if c not in ['ds', 'id_institution_subnet']]
@@ -71,6 +81,11 @@ class ProphetTrafficPredictor(BaseTrafficPredictor):
                     'y': df_st[slice_name].values
                 })
 
+                if len(df_prophet) < 2:
+                    self.models[(slice_name, st)] = None
+                    continue
+
+                # Modèle Prophet à croissance plate (growth='flat') pour éviter toute dérive de tendance
                 m = Prophet(
                     growth='flat',
                     daily_seasonality=True,
@@ -78,11 +93,11 @@ class ProphetTrafficPredictor(BaseTrafficPredictor):
                     yearly_seasonality=False,
                     interval_width=0.80
                 )
-                
+
                 try:
                     m.fit(df_prophet)
                     self.models[(slice_name, st)] = m
-                except Exception as e:
+                except Exception:
                     self.models[(slice_name, st)] = None
 
     def predict_pivoted(
@@ -91,7 +106,7 @@ class ProphetTrafficPredictor(BaseTrafficPredictor):
         df_context: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
         """
-        Génère les prédictions de trafic anticipées station par station.
+        Génère la prédiction `pred_<slice_name>` pour chaque pas de temps via Prophet.
         """
         df_res = df_pivoted.copy().reset_index(drop=True)
         self.slice_names = [c for c in df_res.columns if c not in ['ds', 'id_institution_subnet']]
@@ -104,7 +119,7 @@ class ProphetTrafficPredictor(BaseTrafficPredictor):
 
         for slice_name in self.slice_names:
             col_pred_name = f'pred_{slice_name}'
-            df_res[col_pred_name] = df_res[slice_name].values  # Valeur par défaut
+            df_res[col_pred_name] = df_res[slice_name].values  # Valeur par défaut si modèle indisponible
 
             for st in stations:
                 m = self.models.get((slice_name, st), None)
@@ -120,9 +135,8 @@ class ProphetTrafficPredictor(BaseTrafficPredictor):
                         df_ds = pd.DataFrame({'ds': ds_series})
                         forecast = m.predict(df_ds)
                         pred_vals = np.maximum(0.0, forecast['yhat'].values)
-                        pred_smooth = pd.Series(pred_vals, index=df_st.index).rolling(self.horizon, min_periods=1).max().values
 
-                        df_res.loc[mask, col_pred_name] = pred_smooth
+                        df_res.loc[mask, col_pred_name] = pred_vals
                     except Exception:
                         pass
 

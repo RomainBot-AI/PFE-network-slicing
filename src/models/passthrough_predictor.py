@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ====================================================================================================
  MODULE : src/models/passthrough_predictor.py
- OBJET  : Prédicteur Passthrough / Oracle (Prédiction Proactive sur 1 Heure)
+ OBJET  : Prédicteur Passthrough — Allocation Dynamique Réactive
 ====================================================================================================
 
-DESCRIPTION DÉTAILLÉE :
------------------------
-Définit pred_{slice} = max(real_{slice}^{t+1..t+6}).
-Mode Oracle à prédiction parfaite sur la prochaine heure (6 pas de 10 min).
+ROLE ET POSITION DANS LE PIPELINE :
+-----------------------------------
+Ce module implémente la baseline Passthrough (Oracle à information parfaite).
+Dans la simulation, elle assigne la valeur du trafic réel instantané à la prédiction (`pred = real`).
 
+Pourquoi cette baseline est-elle essentielle ?
+  1. Elle sert de borne supérieure théorique (Upper Bound) : elle montre le score d'économie et de QoS
+     qu'obtiendrait le système si les prédictions futures étaient 100% parfaites ($NMAE = 0.00\%$).
+  2. Elle permet d'illustrer la différence fondamentale entre une réallocation réactive (qui arrive
+     "trop tard" dans un vrai réseau mobile réel) et une réservation proactive par IA.
 ====================================================================================================
 """
 
-import numpy as np
 import pandas as pd
 from typing import Optional, Dict
 from src.models.base_predictor import BaseTrafficPredictor
@@ -22,14 +26,17 @@ from src.models.base_predictor import BaseTrafficPredictor
 
 class PassthroughTrafficPredictor(BaseTrafficPredictor):
     """
-    Prédicteur Passthrough / Oracle Proactif (Horizon 1 heure = 6 pas).
+    Baseline Oracle / Allocation Réactive : \hat{l}^{t+1} = l^{t+1}.
+    Transmet directement la valeur réelle du trafic sans erreur de régression.
     """
 
-    def __init__(self, horizon: int = 6):
+    def __init__(self):
         super().__init__()
-        self.horizon = horizon
 
-    def fit(self, df_train_pivoted: pd.DataFrame):
+    def fit(self, df_train_pivoted: pd.DataFrame) -> None:
+        """
+        Stocke la liste des tranches représentées dans le DataFrame d'entraînement.
+        """
         self.slice_names = [c for c in df_train_pivoted.columns if c not in ['ds', 'id_institution_subnet']]
 
     def predict_pivoted(
@@ -37,29 +44,20 @@ class PassthroughTrafficPredictor(BaseTrafficPredictor):
         df_pivoted: pd.DataFrame,
         df_context: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
+        """
+        Génère les colonnes de prédiction en copiant exactement la charge réelle instantanée.
+
+        :param df_pivoted: DataFrame pivoté d'entrée.
+        :param df_context: Non utilisé pour Passthrough.
+        :return: DataFrame copie avec colonnes `pred_<slice_name>`.
+        """
         df_res = df_pivoted.copy().reset_index(drop=True)
         if not self.slice_names:
             self.slice_names = [c for c in df_pivoted.columns if c not in ['ds', 'id_institution_subnet']]
 
-        has_st = 'id_institution_subnet' in df_pivoted.columns
-        stations = df_pivoted['id_institution_subnet'].unique() if has_st else [None]
-
+        # Assignation directe : pred = real (information parfaite / Oracle)
         for slice_name in self.slice_names:
-            for st in stations:
-                if st is not None:
-                    idx_st = df_res[df_res['id_institution_subnet'] == st].index
-                    series = df_pivoted.loc[idx_st, slice_name].values
-                else:
-                    idx_st = df_res.index
-                    series = df_pivoted[slice_name].values
-
-                preds = []
-                n = len(series)
-                for i in range(n):
-                    future_win = series[i : i + self.horizon]
-                    preds.append(float(np.max(future_win)) if len(future_win) > 0 else float(series[i]))
-
-                df_res.loc[idx_st, f'pred_{slice_name}'] = preds
+            df_res[f'pred_{slice_name}'] = df_res[slice_name].values.copy()
 
         return df_res
 
@@ -68,4 +66,7 @@ class PassthroughTrafficPredictor(BaseTrafficPredictor):
         df_pivoted: pd.DataFrame,
         df_context: Optional[pd.DataFrame] = None
     ) -> Dict[str, float]:
+        """
+        Retourne des erreurs nulles par construction (NMAE = 0.00%).
+        """
         return {'MAE': 0.0, 'RMSE': 0.0, 'NMAE': 0.0}
