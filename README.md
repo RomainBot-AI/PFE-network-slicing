@@ -146,4 +146,4 @@ uv run main.py --model lstm --num_rans 4 --beta 5.0 --lambda_loss 10.0 --episode
 uv run main.py --model all --num_rans 4 --beta 5.0 --lambda_loss 10.0 --episodes 15
 ```
 
-Les graphiques, logs et fichiers d'évaluation sont automatiquement enregistrés dans le dossier `./data/plots/<model_name>/` et archivés dans `./data/experiments_v12/`.
+Les graphiques, logs et fichiers d'évaluation sont automatiquement enregistrés dans le dossier `./data/plots/<model_name>/`.
