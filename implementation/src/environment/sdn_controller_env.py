@@ -37,24 +37,24 @@ class SDN_DoubleController_Env:
         slice_names: Optional[List[str]] = None,
         df_context: Optional[pd.DataFrame] = None,
         alpha_seuil: float = 0.01,
-        capacity_eco1: float = 2500000.0,
-        capacity_eco2: float = 2500000.0,
+        capacity_eco1: Optional[float] = None,
+        capacity_eco2: Optional[float] = None,
         seuil_75_ratio: float = 0.75,
         beta: float = 10.0,
         lambda_loss: float = 50.0,
-        seed: int = 42
+        energy_reward_scale: float = 1000.0,
+        seed: int = 42,
+        ran_ids: Optional[List[int]] = None
     ):
         self.df_traffic = df_traffic.copy()
         self.alpha_seuil = alpha_seuil
-        self.capacity_eco1 = capacity_eco1
-        self.capacity_eco2 = capacity_eco2
-        self.seuil_75 = seuil_75_ratio * capacity_eco1
         self.beta = beta
         self.lambda_loss = lambda_loss
+        self.energy_reward_scale = energy_reward_scale
         self.seed = seed
 
         np.random.seed(seed)
-        self.ran_sim = RAN_Simulator()
+        self.ran_sim = RAN_Simulator(include_ecoslice_in_qos=True)
 
         # Pivot the raw long-format frame to one column per slice.
         if 'slice' in self.df_traffic.columns and 'y' in self.df_traffic.columns:
@@ -76,6 +76,14 @@ class SDN_DoubleController_Env:
             if s not in self.pivoted.columns:
                 self.pivoted[s] = 0.0
 
+        # EcoSlice capacities default to the 95th percentile of the total traffic
+        # carried in one step, so they scale with whatever dataset is replayed
+        # instead of assuming a fixed byte budget.
+        auto_capacity = max(float(self.pivoted[self.slice_names].sum(axis=1).quantile(0.95)), 1.0)
+        self.capacity_eco1 = auto_capacity if capacity_eco1 is None else capacity_eco1
+        self.capacity_eco2 = auto_capacity if capacity_eco2 is None else capacity_eco2
+        self.seuil_75 = seuil_75_ratio * self.capacity_eco1
+
         # Causal Max_i, with no future leakage: instead of a single 95th
         # percentile over the whole panel (train + test), Max_i is a time-varying
         # series computed over a rolling window of PAST steps only (shifted by one
@@ -92,6 +100,12 @@ class SDN_DoubleController_Env:
             # Shift by one step: at step t we only know peaks up to t-1.
             rolling_max_i = rolling_max_i.shift(1).fillna(sub_df[self.slice_names].iloc[0])
             self.Max_i_subnet[sub_id] = rolling_max_i
+
+        # Stable station ordering for the one-hot RAN identity in the state. It is
+        # passed in explicitly so the train and test environments agree on the
+        # layout even when a split does not contain every station.
+        self.unique_subnet_ids = sorted(int(s) for s in (ran_ids if ran_ids is not None else unique_subnets))
+        self.subnet_id_to_idx = {sid: i for i, sid in enumerate(self.unique_subnet_ids)}
 
         # Default to the passthrough (oracle) predictor when none is given.
         if predictor is None:
@@ -114,11 +128,32 @@ class SDN_DoubleController_Env:
         self.past_eta_b = 0.95
         return self._get_state(0)
 
+    def _station_max_i(self, subnet_id: int, ts) -> Dict[str, float]:
+        """Causal Max_i peaks for one station at time ``ts``."""
+        series = self.Max_i_subnet.get(subnet_id)
+        if series is not None and ts in series.index:
+            return series.loc[ts].to_dict()
+        # Fallback if the timestamp is not found (should not happen in normal use).
+        return next(iter(self.Max_i_subnet.values())).iloc[0].to_dict()
+
     def _get_state(self, step_idx: int) -> np.ndarray:
         row_pred = self.pivoted_pred.iloc[step_idx]
-        pred_traffic_vector = [float(row_pred.get(f'pred_{s}', row_pred.get(s, 0.0))) for s in self.slice_names]
+        row_real = self.pivoted.iloc[step_idx]
+        subnet_id = int(row_real['id_institution_subnet'])
+        station_max_i = self._station_max_i(subnet_id, row_real['ds'])
 
-        state = [self.past_f_b / 2000.0, self.past_eta_b] + pred_traffic_vector
+        # Traffic features are scaled by the station's own causal peak so that
+        # stations of very different volumes stay on a comparable scale.
+        pred_traffic_vector = [
+            float(row_pred.get(f'pred_{s}', row_pred.get(s, 0.0))) / max(station_max_i.get(s, 1.0), 1.0)
+            for s in self.slice_names
+        ]
+        ran_onehot = [0.0] * len(self.unique_subnet_ids)
+        ran_idx = self.subnet_id_to_idx.get(subnet_id)
+        if ran_idx is not None:
+            ran_onehot[ran_idx] = 1.0
+
+        state = [self.past_f_b / 2000.0, self.past_eta_b] + pred_traffic_vector + ran_onehot
         return np.array(state, dtype=np.float32)
 
     def step_controller(self, raw_action_dict: Dict[str, int]) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
@@ -130,14 +165,7 @@ class SDN_DoubleController_Env:
         row_pred = self.pivoted_pred.iloc[self.current_step_idx]
         l_pred = {s: float(row_pred.get(f'pred_{s}', row_pred.get(s, 0.0))) for s in self.slice_names}
 
-        # Causal Max_i peaks for this specific RAN station at time ts.
-        station_max_i_series = self.Max_i_subnet.get(subnet_id)
-        if station_max_i_series is not None and ts in station_max_i_series.index:
-            station_max_i = station_max_i_series.loc[ts].to_dict()
-        else:
-            # Fallback if the timestamp is not found (should not happen in normal use).
-            first_series = next(iter(self.Max_i_subnet.values()))
-            station_max_i = first_series.iloc[0].to_dict()
+        station_max_i = self._station_max_i(subnet_id, ts)
 
         # ---------------------------------------------------------------------
         # Algorithm 1: PPO decision c_init (Eco1 always on).
@@ -145,25 +173,30 @@ class SDN_DoubleController_Env:
         c_init = {s: raw_action_dict.get(s, 1) for s in self.slice_names}
         c_init['Eco1'] = 1
 
-        # URLLC protection: force URLLC on whenever it carries traffic.
-        if l_real.get('URLLC', 0.0) > 10.0:
-            c_init['URLLC'] = 1
-
         # ---------------------------------------------------------------------
         # Algorithm 2: SDN 1 threshold filter (alpha_seuil * Max_{i,b}).
         # ---------------------------------------------------------------------
+        # The filter reads the forecast, not the realised load: the controller
+        # must decide before the traffic of the step has arrived.
         c_filtre = {}
         V_rediriger = {}
 
         for s in self.slice_names:
-            threshold = self.alpha_seuil * station_max_i.get(s, 1.0)
-            if c_init[s] == 0 or l_real[s] < threshold:
+            max_i_s = station_max_i.get(s, 1.0)
+            threshold = self.alpha_seuil * max_i_s
+            if c_init[s] == 0 or l_pred[s] <= threshold or max_i_s <= 0:
                 c_filtre[s] = 0
                 V_rediriger[s] = l_real[s]
             else:
                 c_filtre[s] = 1
 
         c_filtre['Eco1'] = 1
+
+        # URLLC protection: keep URLLC up whenever it actually carries traffic,
+        # applied after the filter so the threshold cannot switch it back off.
+        if l_real.get('URLLC', 0.0) > 10.0 and c_filtre.get('URLLC', 1) == 0:
+            c_filtre['URLLC'] = 1
+            V_rediriger.pop('URLLC', None)
 
         # ---------------------------------------------------------------------
         # Algorithm 3: routing and overflow (SDN controller 2).
@@ -233,8 +266,10 @@ class SDN_DoubleController_Env:
 
         qos_violation = (eta_b_t < 1.0) or (L_t > 0.0)
 
-        # PPO reward r_t.
-        reward = (1.0 / f_b_t) + (self.beta * eta_b_t) - (self.lambda_loss * L_t)
+        # PPO reward r_t. The energy term is scaled because f_b is in watts
+        # (order 1e3), so an unscaled 1/f_b would be negligible next to the QoS
+        # and loss terms and the agent would have no incentive to save energy.
+        reward = (self.energy_reward_scale / f_b_t) + (self.beta * eta_b_t) - (self.lambda_loss * L_t)
 
         self.past_f_b = f_b_t
         self.past_eta_b = eta_b_t

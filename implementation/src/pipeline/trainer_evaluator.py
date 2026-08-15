@@ -22,7 +22,11 @@ from src.environment.sdn_controller_env import SDN_DoubleController_Env
 from src.models.predictor_factory import AVAILABLE_MODELS, get_traffic_predictor
 from src.pipeline.config import DEFAULT_DATASET_PATH, DEFAULT_OUTPUT_DIR, RunConfig
 from src.pipeline.macro_ran import aggregate_to_macro_rans, build_subnet_to_macro_map
-from src.visualization.plot_generator import generate_all_plots, generate_comparison_plot
+from src.visualization.plot_generator import (
+    generate_all_plots,
+    generate_comparison_per_ran_plot,
+    generate_comparison_plot,
+)
 
 __all__ = [
     "RunConfig",
@@ -149,14 +153,17 @@ def run_single_model_pipeline(config: RunConfig) -> Dict[str, Any]:
     )
 
     global_slice_names = sorted(c for c in pivoted_full.columns if c not in ["ds", "id_institution_subnet"])
+    global_ran_ids = sorted(int(s) for s in pivoted_full["id_institution_subnet"].unique())
 
     env_train = SDN_DoubleController_Env(
         df_train_raw, predictor=predictor, slice_names=global_slice_names,
         beta=config.beta, lambda_loss=config.lambda_loss, seed=config.seed,
+        ran_ids=global_ran_ids,
     )
     env_test = SDN_DoubleController_Env(
         df_test_raw, predictor=predictor, slice_names=global_slice_names,
         df_context=df_train_pivoted, beta=config.beta, lambda_loss=config.lambda_loss, seed=config.seed,
+        ran_ids=global_ran_ids,
     )
 
     state_sample = env_train.reset()
@@ -190,6 +197,14 @@ def run_single_model_pipeline(config: RunConfig) -> Dict[str, Any]:
         num_rans=config.num_rans if config.num_rans > 0 else 1, num_subnets=num_subnets_total,
     )
 
+    per_ran_metrics: Dict[Any, Dict[str, float]] = {}
+    if "subnet_id" in df_test_res.columns:
+        for subnet_id, group in df_test_res.groupby("subnet_id"):
+            per_ran_metrics[subnet_id] = {
+                "energy_gain": group["delta_E_t"].mean() * 100.0,
+                "qos": group["eta_b_t"].mean(),
+            }
+
     return {
         "model_name": config.model_name,
         "subnet_choice": config.subnet_choice,
@@ -203,6 +218,7 @@ def run_single_model_pipeline(config: RunConfig) -> Dict[str, Any]:
         "mae_test": eval_metrics["MAE"],
         "nmae_test": eval_metrics["NMAE"],
         "rmse_test": eval_metrics["RMSE"],
+        "per_ran_metrics": per_ran_metrics,
     }
 
 
@@ -235,12 +251,13 @@ def run_all_models_pipeline(config: RunConfig) -> Dict[str, Dict[str, Any]]:
     print("=" * 105)
 
     first_res = next(iter(results_summary.values()), {})
-    generate_comparison_plot(
-        results_summary, data_plots_dir, artifacts_dir,
+    plot_kwargs = dict(
         beta=config.beta, lambda_loss=config.lambda_loss,
         num_rans=config.num_rans if config.num_rans > 0 else 1,
         num_subnets=first_res.get("num_subnets_total", 69),
     )
+    generate_comparison_plot(results_summary, data_plots_dir, artifacts_dir, **plot_kwargs)
+    generate_comparison_per_ran_plot(results_summary, data_plots_dir, artifacts_dir, **plot_kwargs)
     return results_summary
 
 
@@ -261,7 +278,7 @@ def run_loop(
     total_wh = 0.0
 
     for step_i in range(env.max_steps):
-        action_binary, log_prob, val = agent.select_action(state)
+        action_binary, log_prob, val = agent.select_action(state, deterministic=not is_train)
         raw_action_dict = {s: int(action_binary[idx]) for idx, s in enumerate(sorted(env.slice_names))}
 
         next_state, reward, done, info = env.step_controller(raw_action_dict)
