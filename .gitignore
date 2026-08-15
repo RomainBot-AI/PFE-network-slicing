@@ -17,6 +17,4 @@ implementation/data/plots/
 forecasting/data/
 forecasting/outputs/
 forecasting/experiments/runs/
-data/interim/
-data/processed/
 rapport_overleaf/
