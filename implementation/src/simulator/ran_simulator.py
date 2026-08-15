@@ -40,6 +40,7 @@ class RAN_Simulator:
         P_dynamic: float = 742.0,
         delta_active: Optional[Dict[str, float]] = None,
         delta_eco: float = 11.0,
+        include_ecoslice_in_qos: bool = False,
     ):
         self.tau_minutes = tau_minutes
         self.P_static = P_static
@@ -79,6 +80,10 @@ class RAN_Simulator:
         # EcoSlice latency: fixed, independent of rho. 11 ms is the paper's
         # exact EcoSlice value (Table I).
         self.delta_eco = delta_eco
+
+        # When enabled, the active EcoSlices are scored alongside the specialised
+        # slices in eta_b instead of being excluded from the average.
+        self.include_ecoslice_in_qos = include_ecoslice_in_qos
 
     def compute_bandwidth_ratio(
         self,
@@ -173,6 +178,19 @@ class RAN_Simulator:
                 satisfaction = max(0.0, 1.0 - (achieved_delay - req_delay) / req_delay)
 
             qos_slice[s] = satisfaction
+
+        if self.include_ecoslice_in_qos:
+            for eco_name in ('Eco1', 'Eco2'):
+                default_state = 1 if eco_name == 'Eco1' else 0
+                if slice_states.get(eco_name, default_state) != 1:
+                    continue
+                req_delay = self.d_u_requirements.get(eco_name, 50.0)
+                if self.delta_eco <= req_delay:
+                    satisfaction = 1.0
+                else:
+                    satisfaction = max(0.0, 1.0 - (self.delta_eco - req_delay) / req_delay)
+                qos_slice[eco_name] = satisfaction
+                delta_slice[eco_name] = self.delta_eco
 
         # Eq. 4: unweighted arithmetic mean across slices.
         overall_qos = float(np.mean(list(qos_slice.values()))) if len(qos_slice) > 0 else 1.0

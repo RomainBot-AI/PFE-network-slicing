@@ -70,13 +70,18 @@ class PPOAgent:
         self.policy = ActorCritic(state_dim, action_dim)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
 
-    def select_action(self, state: np.ndarray) -> Tuple[np.ndarray, float, float]:
-        """Sample a binary action vector c_init in {0, 1}^K from the Bernoulli policy."""
+    def select_action(self, state: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, float, float]:
+        """Draw a binary action vector c_init in {0, 1}^K from the Bernoulli policy.
+
+        With ``deterministic=True`` the policy is thresholded at p >= 0.5 instead
+        of sampled, so evaluation runs are reproducible and free of exploration
+        noise. Training must keep sampling for the PPO objective to be valid.
+        """
         state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             probs, value = self.policy(state_t)
             dist = Bernoulli(probs)
-            action = dist.sample()
+            action = (probs >= 0.5).float() if deterministic else dist.sample()
             log_prob = dist.log_prob(action).sum(dim=-1)
 
         action_np = action.squeeze(0).cpu().numpy().astype(np.int32)

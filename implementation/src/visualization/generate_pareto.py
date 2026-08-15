@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Energy-vs-QoS Pareto frontier chart for the four experiment regimes.
+"""Energy-vs-QoS Pareto frontier chart for the seven experiment regimes.
 
 Figure labels are kept in French to match the report/defense.
 """
@@ -12,7 +12,7 @@ import numpy as np
 
 _IMPL_ROOT = Path(__file__).resolve().parents[2]
 
-# Consolidated results from the four PFE experiments.
+# Consolidated results from the seven PFE experiments.
 experiments = {
     'Exp 2 : Sobriété Extrême\n(β=2, λ=10)': {
         'Gain Énergie (%)': 29.49,
@@ -20,11 +20,29 @@ experiments = {
         'Color': '#e67e22',
         'Marker': 'o'
     },
+    'Exp 5 : Sobriété Protégée\n(β=2, λ=50)': {
+        'Gain Énergie (%)': 25.24,
+        'Satisfaction QoS (%)': 90.82,
+        'Color': '#d35400',
+        'Marker': 'D'
+    },
     'Exp 1 : Équilibré Standard\n(β=10, λ=50)': {
         'Gain Énergie (%)': 24.62,
         'Satisfaction QoS (%)': 79.06,
         'Color': '#3498db',
         'Marker': 's'
+    },
+    'Exp 7 : Sobriété Anti-Surcharge\n(β=2, λ=100)': {
+        'Gain Énergie (%)': 20.07,
+        'Satisfaction QoS (%)': 88.64,
+        'Color': '#e74c3c',
+        'Marker': 'v'
+    },
+    'Exp 6 : QoS Prioritaire\n(β=35, λ=50)': {
+        'Gain Énergie (%)': 18.39,
+        'Satisfaction QoS (%)': 94.71,
+        'Color': '#27ae60',
+        'Marker': 'p'
     },
     'Exp 4 : Anti-Surcharge\n(β=10, λ=200)': {
         'Gain Énergie (%)': 14.64,
@@ -49,12 +67,21 @@ labels = list(experiments.keys())
 colors = [v['Color'] for v in experiments.values()]
 markers = [v['Marker'] for v in experiments.values()]
 
-# Plot the trade-off curve / Pareto frontier.
-sorted_indices = np.argsort(gains)
-gains_sorted = np.array(gains)[sorted_indices]
-qos_sorted = np.array(qos_scores)[sorted_indices]
+# Pareto frontier: keep only the non-dominated regimes (no other regime beats
+# them on energy gain *and* QoS at once), then join those. Connecting every
+# point in x-order instead would draw a zig-zag through dominated regimes.
+points = sorted(zip(gains, qos_scores))
+frontier = []
+for gain, qos in reversed(points):
+    if not frontier or qos > frontier[-1][1]:
+        frontier.append((gain, qos))
+frontier.reverse()
 
-ax.plot(gains_sorted, qos_sorted, linestyle='--', color='#7f8c8d', linewidth=2.0, label='Courbe de Compromis (Frontière de Pareto)', zorder=1)
+ax.plot(
+    [p[0] for p in frontier], [p[1] for p in frontier],
+    linestyle='--', color='#7f8c8d', linewidth=2.0,
+    label='Courbe de Compromis (Frontière de Pareto)', zorder=1
+)
 
 for label, info in experiments.items():
     ax.scatter(info['Gain Énergie (%)'], info['Satisfaction QoS (%)'], color=info['Color'], s=220, zorder=5, label=label.replace('\n', ' '), edgecolors='black', linewidth=1.5)

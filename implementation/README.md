@@ -85,26 +85,41 @@ Columns: `ds`, `id_institution_subnet`, `slice`, `y`. Override with `--dataset`.
 
 ## Method
 
-- **Reward**: `r_t = 1/f_b + beta * eta - lambda_loss * L`, trading off energy
-  efficiency (`1/f_b`, power in Watts), QoS satisfaction (`eta`), and traffic
-  loss (`L`).
+- **Reward**: `r_t = w_E/f_b + beta * eta - lambda_loss * L`, trading off energy
+  efficiency (`f_b` in Watts), QoS satisfaction (`eta`), and traffic loss (`L`).
+  `w_E` is `energy_reward_scale` (default 1000): with `f_b` on the order of
+  1e3 W, an unscaled `1/f_b` would be ~1e-3 against a QoS term of ~10, so the
+  energy objective would carry no weight at all.
+- **State**: previous power and QoS, the per-slice forecast normalised by the
+  station's own causal `Max_i`, and a one-hot identifying the Macro-RAN, so the
+  agent can tell stations of very different volumes apart.
 - **Control (Algorithms 1–4)**: PPO decides on/off per specialised slice
-  (EcoSlice 1 always on) → threshold filter turns off slices below
-  `alpha * Max_i` (causal rolling 95th percentile, no future leakage) → priority
-  routing (URLLC > URLLC_eMBB_MIX > mMTC > eMBB) into EcoSlice 1, spilling to
+  (EcoSlice 1 always on) → threshold filter turns off slices whose *forecast*
+  is below `alpha * Max_i` (causal rolling 95th percentile, no future leakage),
+  with URLLC re-armed whenever it actually carries traffic → priority routing
+  (URLLC > URLLC_eMBB_MIX > mMTC > eMBB) into EcoSlice 1, spilling to
   EcoSlice 2 above 75% → safety fallback re-activates the heaviest slice on
   overload.
+- **EcoSlice capacity**: defaults to the 95th percentile of the total traffic
+  carried in one step, so it scales with whatever dataset is replayed instead
+  of assuming a fixed byte budget.
 - **Predictors** share the `BaseTrafficPredictor` interface and are scored by
   MAE / RMSE / NMAE; `passthrough` is a perfect-foresight oracle baseline.
-- **Split**: chronological 80/20 train/test, no shuffling.
+- **Split**: chronological 80/20 train/test, no shuffling. Training samples the
+  Bernoulli policy; evaluation thresholds it at `p >= 0.5`, so reported test
+  numbers carry no exploration noise.
 
 ## Outputs
 
 Figures are written under `--output_dir` (default `data/plots/`), with a flat
 copy under `data/plots/_artifacts/`. Per-run figures include traffic prediction,
 active-slice timeline, bandwidth allocation, QoS/SLA analysis, energy
-consumption, PPO train-vs-test, and an all-models benchmark chart.
-`data/experiments/` holds saved results from earlier `beta`/`lambda_loss` sweeps.
+consumption, PPO train-vs-test, and an all-models benchmark chart. `--model all`
+additionally writes `7b_benchmark_per_ran.png`, breaking energy gain and QoS
+down per Macro-RAN. `data/experiments/` holds saved results from earlier
+`beta`/`lambda_loss` sweeps; `src/visualization/generate_pareto.py` plots the
+energy-vs-QoS Pareto frontier over the seven recorded regimes, and
+`references.bib` collects the works cited by the report.
 
 Console logs and figure labels are in French; code and documentation are in English.
 

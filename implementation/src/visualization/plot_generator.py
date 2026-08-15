@@ -399,6 +399,80 @@ def generate_comparison_plot(
     save_fig(fig, '7_benchmark_all_models.png', data_plots_dir, artifacts_dir)
 
 
+def generate_comparison_per_ran_plot(
+    results_summary: Dict[str, Dict[str, Any]],
+    data_plots_dir: str,
+    artifacts_dir: str,
+    beta: float = 10.0,
+    lambda_loss: float = 50.0,
+    num_rans: int = 4,
+    num_subnets: int = 69
+):
+    """Break the model benchmark down per Macro-RAN (energy gain and QoS)."""
+    models = list(results_summary.keys())
+    if not models:
+        return
+
+    first_res = results_summary[models[0]]
+    if not first_res.get('per_ran_metrics'):
+        return
+
+    rans = sorted(first_res['per_ran_metrics'].keys())
+
+    fig, (ax_energy, ax_qos) = plt.subplots(2, 1, figsize=(16, 12))
+    colors = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#e74c3c', '#1abc9c']
+    width = 0.8 / len(models)
+    x = np.arange(len(rans))
+
+    max_e, max_q = 20.0, 100.0
+    for m in models:
+        per_ran = results_summary[m].get('per_ran_metrics', {})
+        e_gains = [per_ran.get(r, {}).get('energy_gain', 0.0) for r in rans]
+        q_scores = [per_ran.get(r, {}).get('qos', 1.0) * 100.0 for r in rans]
+        if e_gains:
+            max_e = max(max_e, max(e_gains))
+        if q_scores:
+            max_q = max(max_q, max(q_scores))
+
+    ax_energy.set_ylim(0, max(10.0, max_e * 1.25))
+    ax_qos.set_ylim(0, min(125.0, max(20.0, max_q * 1.25)))
+
+    for i, m in enumerate(models):
+        per_ran = results_summary[m].get('per_ran_metrics', {})
+        e_gains = [per_ran.get(r, {}).get('energy_gain', 0.0) for r in rans]
+        q_scores = [per_ran.get(r, {}).get('qos', 1.0) * 100.0 for r in rans]
+        offset = (i - len(models) / 2.0 + 0.5) * width
+
+        ax_energy.bar(x + offset, e_gains, width, label=m.upper(), color=colors[i % len(colors)])
+        ax_qos.bar(x + offset, q_scores, width, label=m.upper(), color=colors[i % len(colors)])
+
+        # Rotated labels so the grouped bars stay readable with many models.
+        for j, (eg, qs) in enumerate(zip(e_gains, q_scores)):
+            ax_energy.text(x[j] + offset, eg + (max_e * 0.02), f"{eg:.1f}%",
+                           ha='center', va='bottom', fontsize=8, fontweight='bold', rotation=90)
+            ax_qos.text(x[j] + offset, qs + (max_q * 0.02), f"{qs:.1f}%",
+                        ha='center', va='bottom', fontsize=8, fontweight='bold', rotation=90)
+
+    ax_energy.set_title('Gain Énergétique par Macro-RAN', fontsize=12, fontweight='bold')
+    ax_energy.set_ylabel('Gain Énergie (%)', fontsize=11)
+    ax_energy.set_xticks(x)
+    ax_energy.set_xticklabels([f"RAN {r}" for r in rans])
+    ax_energy.legend(loc='upper right')
+    ax_energy.grid(True, linestyle='--', alpha=0.5, axis='y')
+
+    ax_qos.set_title('Satisfaction QoS par Macro-RAN', fontsize=12, fontweight='bold')
+    ax_qos.set_ylabel('QoS (%)', fontsize=11)
+    ax_qos.set_xticks(x)
+    ax_qos.set_xticklabels([f"RAN {r}" for r in rans])
+    ax_qos.legend(loc='lower right')
+    ax_qos.grid(True, linestyle='--', alpha=0.5, axis='y')
+
+    fig.suptitle('BENCHMARK COMPARATIF 7B : GAIN & QoS PAR STATION (MACRO-RAN)', fontsize=14, fontweight='bold')
+    add_metadata_badge(fig, beta, lambda_loss, num_rans, num_subnets)
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
+    save_fig(fig, '7b_benchmark_per_ran.png', data_plots_dir, artifacts_dir)
+
+
 def save_fig(fig, filename, target_dir, artifacts_dir, prefix: str = ""):
     os.makedirs(target_dir, exist_ok=True)
     os.makedirs(artifacts_dir, exist_ok=True)
