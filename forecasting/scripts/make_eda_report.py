@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
         help="Dense subnet/slice panel with unique_id, ds, y, slice, id_institution, id_institution_subnet.",
     )
     parser.add_argument("--output-dir", default="forecasting/reports")
-    parser.add_argument("--report-md", default="forecasting/forecasting/reports/subnet_slice_eda.md")
+    parser.add_argument("--report-md", default="forecasting/reports/subnet_slice_eda.md")
     parser.add_argument("--freq", default="10min")
     parser.add_argument("--autocorr-lags", default="1,6,12,36,144,1008")
     parser.add_argument("--autocorr-top-n-per-slice", type=int, default=10)

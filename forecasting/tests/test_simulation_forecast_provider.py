@@ -7,7 +7,7 @@ import numpy as np
 
 
 def _load_ppo_module():
-    path = Path(__file__).resolve().parents[1] / "simulation" / "ppo.py"
+    path = Path(__file__).resolve().parents[2] / "simulation" / "ppo.py"
     spec = importlib.util.spec_from_file_location("simulation_ppo", path)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)

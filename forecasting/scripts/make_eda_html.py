@@ -10,7 +10,7 @@ import os
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-dir", default="forecasting/reports")
-    parser.add_argument("--output-html", default="forecasting/forecasting/reports/subnet_slice_eda.html")
+    parser.add_argument("--output-html", default="forecasting/reports/subnet_slice_eda.html")
     parser.add_argument("--panel-path", default="forecasting/data/subnet_slice_traffic_min2016_dense.csv")
     return parser.parse_args()
 
